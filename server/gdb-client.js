@@ -23,6 +23,9 @@ export class GdbClient extends EventEmitter {
     cwd,
     executable,
     args = [],
+    runtimeScript = null,
+    runtimeCommand = null,
+    runtimeStatePrefix = null,
     adapterScript = null,
     adapterCommand = null,
     adapterStatePrefix = null,
@@ -34,6 +37,9 @@ export class GdbClient extends EventEmitter {
     this.cwd = cwd;
     this.executable = executable;
     this.args = args;
+    this.runtimeScript = runtimeScript;
+    this.runtimeCommand = runtimeCommand;
+    this.runtimeStatePrefix = runtimeStatePrefix;
     this.adapterScript = adapterScript;
     this.adapterCommand = adapterCommand;
     this.adapterStatePrefix = adapterStatePrefix;
@@ -48,6 +54,7 @@ export class GdbClient extends EventEmitter {
     this.consoleLines = [];
     this.targetLines = [];
     this.lastStop = null;
+    this.lastRuntimeState = null;
     this.lastAdapterState = null;
     this.gdbExited = false;
     this.inferiorExited = false;
@@ -80,6 +87,9 @@ export class GdbClient extends EventEmitter {
     await this.command(`-file-exec-and-symbols ${miQuote(this.executable)}`);
     if (this.args.length) await this.command(`-exec-arguments ${this.args.map(miQuote).join(' ')}`);
 
+    if (this.runtimeScript) {
+      await this.command(`-interpreter-exec console ${miQuote(`source ${this.runtimeScript}`)}`);
+    }
     if (this.adapterScript) {
       await this.command(`-interpreter-exec console ${miQuote(`source ${this.adapterScript}`)}`);
     }
@@ -147,6 +157,7 @@ export class GdbClient extends EventEmitter {
 
   async snapshot() {
     if (this.inferiorExited) {
+      const runtimeState = this.runtimeCommand ? await this.#readRuntimeState() : null;
       const adapterState = this.adapterCommand ? await this.#readAdapterState() : null;
       return {
         status: 'exited',
@@ -155,6 +166,7 @@ export class GdbClient extends EventEmitter {
         frames: [],
         locals: [],
         targetOutput: this.targetLines.join(''),
+        runtimeState: runtimeState?.available ? runtimeState : this.lastRuntimeState,
         adapterState: adapterState ?? this.lastAdapterState
       };
     }
@@ -165,7 +177,10 @@ export class GdbClient extends EventEmitter {
       this.command('-stack-list-variables --simple-values')
     ]);
 
-    const adapterState = this.adapterCommand ? await this.#readAdapterState() : null;
+    const [runtimeState, adapterState] = await Promise.all([
+      this.runtimeCommand ? this.#readRuntimeState() : Promise.resolve(null),
+      this.adapterCommand ? this.#readAdapterState() : Promise.resolve(null)
+    ]);
 
     return {
       status: 'paused',
@@ -174,6 +189,7 @@ export class GdbClient extends EventEmitter {
       frames: unwrapList(stackRecord.results.stack, 'frame'),
       locals: unwrapList(localsRecord.results.variables, 'variable'),
       targetOutput: this.targetLines.join(''),
+      runtimeState,
       adapterState
     };
   }
@@ -187,6 +203,23 @@ export class GdbClient extends EventEmitter {
     }
     this.gdbExited = true;
     this.running = false;
+  }
+
+  async #readRuntimeState() {
+    if (!this.runtimeCommand || !this.runtimeStatePrefix) return null;
+    const startIndex = this.consoleLines.length;
+    try {
+      await this.command(`-interpreter-exec console ${miQuote(this.runtimeCommand)}`);
+      const added = this.consoleLines.slice(startIndex);
+      const stateLine = [...added].reverse().find((line) => line.startsWith(this.runtimeStatePrefix));
+      if (!stateLine) return this.lastRuntimeState;
+      const state = JSON.parse(stateLine.slice(this.runtimeStatePrefix.length));
+      if (state?.available) this.lastRuntimeState = state;
+      return state;
+    } catch (error) {
+      if (this.lastRuntimeState) return this.lastRuntimeState;
+      return { available: false, reason: error.message };
+    }
   }
 
   async #readAdapterState() {
