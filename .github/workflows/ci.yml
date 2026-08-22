@@ -35,7 +35,6 @@ jobs:
             -p 4173:4173 \
             --cap-add=SYS_PTRACE \
             --security-opt seccomp=unconfined \
-            --tmpfs /workspace/projects \
             c-vis-ci
           trap 'docker logs c-vis-ci-run || true; docker rm -f c-vis-ci-run || true' EXIT
           bash test/integration.sh
