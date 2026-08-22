@@ -17,6 +17,8 @@
 }
 .entry-chip strong { color: var(--text); }
 .entry-chip span { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .07em; }
+.static-entry-chip { border-color: #35523d; }
+.static-entry-chip strong { color: var(--primary); }
 
 .project-import {
   display: grid;
@@ -115,6 +117,65 @@
 .phase-message { margin-left: auto; color: var(--primary); font: 500 9px var(--mono); }
 .project-warnings { margin-top: 15px; padding: 10px 11px; border: 1px solid #645736; border-radius: 6px; color: #ffd59a; font: 9px/1.5 var(--mono); }
 
+.static-program { display: grid; gap: 18px; padding: 18px; }
+.static-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: end;
+  padding: 16px;
+  border: 1px solid var(--outline);
+  border-radius: 9px;
+  background: var(--surface-container);
+}
+.static-summary h2 { margin: 4px 0 6px; font-size: 18px; }
+.static-summary p { max-width: 600px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.static-counts { display: grid; grid-template-columns: repeat(2, minmax(84px, 1fr)); gap: 6px; }
+.static-counts span { display: grid; gap: 2px; min-width: 84px; padding: 8px 9px; border: 1px solid var(--outline); border-radius: 5px; background: var(--surface-lowest); color: var(--muted); font: 8px var(--mono); text-transform: uppercase; }
+.static-counts strong { color: var(--text); font-size: 13px; }
+.static-section { display: grid; gap: 10px; }
+.static-section > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 0 2px; }
+.static-section > header span { font: 700 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.static-section > header small { color: var(--muted); font: 8px var(--mono); }
+.struct-grid, .declaration-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+.struct-card, .declaration-card { min-width: 0; overflow: hidden; border: 1px solid var(--outline); border-radius: 8px; background: var(--surface-container); }
+.struct-card.recursive { border-color: #35523d; }
+.struct-card > header, .declaration-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 12px; border-bottom: 1px solid var(--outline); }
+.struct-card h3, .declaration-card h3 { margin: 2px 0 0; font: 650 13px var(--mono); }
+.type-kind { color: var(--primary); font: 700 7px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.struct-card header button, .declaration-card header button { max-width: 48%; overflow: hidden; padding: 3px 0; border: 0; background: transparent; color: var(--muted); font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.struct-card header button:hover, .declaration-card header button:hover { color: var(--primary); }
+.struct-fields { display: grid; }
+.struct-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 12px; border-bottom: 1px solid rgba(95,110,103,.16); }
+.struct-field:last-child { border-bottom: 0; }
+.struct-field code { overflow: hidden; color: var(--muted); font: 9px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.struct-field strong { font: 600 9px var(--mono); }
+.recursive-model { display: flex; align-items: center; gap: 5px; overflow: auto; padding: 11px 12px 5px; border-top: 1px solid var(--outline); }
+.recursive-model span { flex: 0 0 auto; padding: 6px 8px; border: 1px solid #35523d; border-radius: 4px; background: var(--primary-soft); color: var(--primary); font: 8px var(--mono); }
+.recursive-model b { color: #7e9485; font: 500 10px var(--mono); }
+.recursive-model em { color: var(--muted); font: 8px var(--mono); font-style: normal; }
+.relationship-note { display: block; padding: 3px 12px 10px; color: #7f8c80; font: 7px var(--mono); text-transform: uppercase; letter-spacing: .05em; }
+.enum-members { display: flex; flex-wrap: wrap; gap: 6px; padding: 11px 12px; }
+.enum-members code { padding: 5px 7px; border: 1px solid var(--outline); border-radius: 4px; background: var(--surface-lowest); color: #c7d1cc; font: 8px var(--mono); }
+.alias-list, .define-list { display: grid; border: 1px solid var(--outline); border-radius: 8px; overflow: hidden; }
+.alias-row, .define-row { display: grid; align-items: center; gap: 10px; width: 100%; padding: 8px 11px; border: 0; border-bottom: 1px solid rgba(95,110,103,.16); background: var(--surface-container); color: var(--text); text-align: left; }
+.alias-row { grid-template-columns: minmax(100px, .6fr) auto minmax(0, 1fr) auto; }
+.define-row { grid-template-columns: minmax(100px, .6fr) minmax(0, 1fr) auto; }
+.alias-row:last-child, .define-row:last-child { border-bottom: 0; }
+.alias-row:hover, .define-row:hover { background: var(--surface-lowest); }
+.alias-row strong, .define-row strong { font: 600 9px var(--mono); }
+.alias-row > span { color: var(--muted); }
+.alias-row code, .define-row code { overflow: hidden; color: var(--primary); font: 9px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.alias-row small, .define-row small { color: var(--muted); font: 7px var(--mono); }
+.static-empty { padding: 18px; border: 1px dashed var(--outline); border-radius: 8px; background: var(--surface-lowest); }
+.static-empty h3 { margin: 0 0 6px; font-size: 13px; }
+.static-empty p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.static-mode-footer { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 12px; min-height: 64px; padding: 0 18px; border-top: 1px solid var(--outline); background: var(--surface-container); }
+.static-mode-footer span { color: var(--primary); font: 700 8px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.static-mode-footer strong { font: 600 10px var(--mono); }
+.static-mode-footer small { justify-self: end; color: var(--muted); font: 8px var(--mono); }
+.view-switcher button:disabled { cursor: not-allowed; opacity: .38; }
+
 .diagnostics-drawer {
   position: absolute;
   inset: 72px 0 64px auto;
@@ -142,4 +203,6 @@
   .import-card { width: min(620px, 86vw); }
   .diagnostics-drawer { width: min(620px, 68vw); }
   .entry-point-heading { grid-template-columns: 1fr; align-items: stretch; }
+  .static-summary { grid-template-columns: 1fr; align-items: stretch; }
+  .static-counts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
