@@ -55,7 +55,7 @@
 
                   {#if object?.kind === 'array'}
                     {@const stringValue = charArrayText(object)}
-                    <div class="frame-inline-array" class:string-array={stringValue !== null}>
+                    <div class={stringValue !== null ? 'frame-inline-array string-array' : 'frame-inline-array'}>
                       {#each visibleElements(object) as element (element.index)}
                         <div title={element.address ?? ''}>
                           <span>{element.index}</span>
