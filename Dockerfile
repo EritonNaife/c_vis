@@ -18,7 +18,7 @@ ENV PORT=4173 \
     CVIS_RUNTIME_DIR=/workspace/run \
     CVIS_EXECUTABLE=./push_swap \
     CVIS_ADAPTER=push_swap \
-    CVIS_TRACE_LIMIT=1500
+    CVIS_TRACE_LIMIT=5000
 
 EXPOSE 4173
 CMD ["npm", "start"]

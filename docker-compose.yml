@@ -11,7 +11,7 @@ services:
       CVIS_EXECUTABLE: "${CVIS_EXECUTABLE:-./push_swap}"
       CVIS_BUILD_COMMAND: '${CVIS_BUILD_COMMAND:-make re CFLAGS="-Wall -Wextra -Werror -g -O0"}'
       CVIS_ADAPTER: "${CVIS_ADAPTER:-push_swap}"
-      CVIS_TRACE_LIMIT: "${CVIS_TRACE_LIMIT:-1500}"
+      CVIS_TRACE_LIMIT: "${CVIS_TRACE_LIMIT:-5000}"
       CVIS_GDB_STOP_TIMEOUT_MS: "${CVIS_GDB_STOP_TIMEOUT_MS:-30000}"
     cap_add:
       - SYS_PTRACE

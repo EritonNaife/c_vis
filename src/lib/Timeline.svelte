@@ -23,7 +23,7 @@
 
   function traceMessage() {
     if (!active) return 'Build & start to observe execution';
-    if (traceStatus === 'running') return `Tracing · ${total} observed of ${trace?.limit ?? '—'} state safety limit`;
+    if (traceStatus === 'running') return `Preparing replay · ${total} observed of ${trace?.limit ?? '—'} state safety limit`;
     if (traceStatus === 'complete') return `Execution complete · ${total} observed states`;
     if (traceStatus === 'timed_out') return trace?.message ?? 'Trace timed out. Partial state is usable; Resume or use Next.';
     if (traceStatus === 'cancelled') return trace?.message ?? 'Trace cancelled. Partial state is usable.';
