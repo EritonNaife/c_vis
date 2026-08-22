@@ -15,7 +15,7 @@ Browser analyzes files, functions and structures
    ↓
 Resolve execution entry automatically
    ├── main() exists → use it
-   └── no main() → choose/detect a function + generate disposable runner
+   └── no main() → detect functions + generate disposable runner
    ↓
 c_vis creates an isolated build workspace
    ↓
@@ -35,13 +35,13 @@ A normal C program with `main()` runs directly.
 For C code that defines functions but has no `main()`, c_vis:
 
 1. detects callable function definitions in the browser and validates them on the backend;
-2. selects the only function automatically, or exposes a compact function selector when several are available;
+2. selects the only function automatically, or preselects one and exposes a compact function selector when several are available;
 3. pre-fills function arguments with useful C-expression defaults;
 4. generates `__cvis_harness.c` only inside the disposable runtime workspace;
 5. compiles the generated runner with the uploaded source;
 6. starts GDB directly at the selected source function, so the generated runner is not part of the learning surface.
 
-Uploaded source is never modified.
+Uploaded source is never modified. c_vis asks the user only for semantic intent it cannot safely infer — for example, which of several functions they actually want to inspect or which input values matter. It does not hand build/debug configuration back to the user.
 
 ## Browser-owned work
 
