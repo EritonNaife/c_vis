@@ -1,6 +1,8 @@
 export const GENERIC_ADAPTER = Object.freeze({
   id: 'generic',
   script: null,
+  command: null,
+  statePrefix: null,
   tracePolicy: {
     skipFiles: [],
     skipFunctions: []
@@ -11,6 +13,8 @@ export const GENERIC_ADAPTER = Object.freeze({
 export const PUSH_SWAP_ADAPTER = Object.freeze({
   id: 'push_swap',
   script: 'push_swap.py',
+  command: 'cvis-push-swap-state',
+  statePrefix: 'CVIS_PUSH_SWAP_STATE ',
   tracePolicy: {
     skipFiles: ['src/utils.c', 'src/print_numbers.c', 'src/benchmark.c'],
     skipFunctions: [
