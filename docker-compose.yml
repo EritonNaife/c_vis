@@ -1,0 +1,17 @@
+services:
+  c-vis:
+    build: .
+    ports:
+      - "4173:4173"
+    volumes:
+      - "${TARGET_PROJECT:-../push_swap}:/workspace/source:ro"
+    environment:
+      CVIS_SOURCE_DIR: /workspace/source
+      CVIS_RUNTIME_DIR: /workspace/run
+      CVIS_EXECUTABLE: "${CVIS_EXECUTABLE:-./push_swap}"
+      CVIS_BUILD_COMMAND: '${CVIS_BUILD_COMMAND:-make re CFLAGS="-Wall -Wextra -Werror -g -O0"}'
+      CVIS_ADAPTER: "${CVIS_ADAPTER:-push_swap}"
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined

@@ -1,0 +1,15 @@
+{
+  "name": "c_vis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local C execution visualizer powered by GDB, with a push_swap adapter.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

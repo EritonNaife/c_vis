@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>c_vis</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header><strong>c_vis</strong><span id="status">idle</span></header>
+  <section class="controls">
+    <input id="args" value="4 67 3 87 23" aria-label="Program arguments">
+    <button id="start">Build & start</button>
+    <button id="restart" disabled>Restart</button>
+    <button id="step" disabled>Step in</button>
+    <button id="next" disabled>Step over</button>
+    <button id="finish" disabled>Finish</button>
+    <button id="continue" disabled>Continue</button>
+  </section>
+  <div id="error"></div>
+  <main>
+    <section class="panel code-panel">
+      <div class="title"><span id="sourceTitle">Source</span><span id="location"></span></div>
+      <div class="code-shell"><nav id="files"></nav><pre id="source"></pre></div>
+    </section>
+    <section class="panel">
+      <div class="title">push_swap runtime</div>
+      <div class="runtime">
+        <h3>Stack A</h3><div id="stackA" class="stack"></div>
+        <h3>Stack B</h3><div id="stackB" class="stack"></div>
+        <div class="metrics"><span>strategy <b id="strategy">-</b></span><span>disorder <b id="disorder">-</b></span><span>ops <b id="opCount">0</b></span></div>
+        <h3>Operations</h3><div id="operations"></div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="title">Inspect</div>
+      <div class="runtime"><h3>Locals</h3><div id="locals"></div><h3>Call stack</h3><div id="frames"></div><h3>stdout</h3><pre id="output"></pre></div>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
