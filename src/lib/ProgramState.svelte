@@ -1,10 +1,13 @@
 <script>
   import StackDiagram from './StackDiagram.svelte';
+  import RuntimeVisualizer from './RuntimeVisualizer.svelte';
 
   let { snapshot, previousSnapshot } = $props();
 
   const pushSwap = $derived(snapshot?.pushSwap?.available ? snapshot.pushSwap : null);
   const previousPushSwap = $derived(previousSnapshot?.pushSwap?.available && previousSnapshot.pushSwap.initialized !== false ? previousSnapshot.pushSwap : null);
+  const runtime = $derived(snapshot?.runtime?.available ? snapshot.runtime : null);
+  const previousRuntime = $derived(previousSnapshot?.runtime?.available ? previousSnapshot.runtime : null);
   const initialized = $derived(pushSwap ? pushSwap.initialized !== false : false);
   const completed = $derived(snapshot?.status === 'exited');
   const strategyNames = ['adaptive', 'simple', 'medium', 'complex'];
@@ -73,9 +76,13 @@
         <div><span>operations</span><strong>—</strong></div>
       </div>
     </section>
-  {:else}
+  {/if}
+
+  {#if runtime?.roots?.length && !(pushSwap && initialized)}
+    <RuntimeVisualizer {runtime} {previousRuntime} />
+  {:else if !pushSwap}
     <section class="generic-state">
-      <p>{snapshot?.pushSwap?.reason ?? 'Program-specific structures will appear when they enter scope.'}</p>
+      <p>{runtime?.reason ?? 'Runtime data will appear as the program creates and uses it.'}</p>
     </section>
   {/if}
 </div>
