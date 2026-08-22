@@ -30,11 +30,11 @@ export function postJson(url, payload, options = {}) {
   });
 }
 
-export async function streamRun({ workspaceId, args = [], signal, onEvent }) {
+export async function streamRun({ workspaceId, args = [], entry = null, signal, onEvent }) {
   const response = await fetch('/api/runs', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ workspaceId, args }),
+    body: JSON.stringify({ workspaceId, args, entry }),
     signal
   });
 
