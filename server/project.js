@@ -11,6 +11,7 @@ const MAKEFILE_NAMES = ['Makefile', 'makefile', 'GNUmakefile'];
 const MAX_FILES = 1500;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_PROJECT_BYTES = 25 * 1024 * 1024;
+const FUNCTION_DEFINITION_RE = /(^|\n)[ \t]*((?:(?:static|extern|inline|_Noreturn|const|volatile|signed|unsigned|short|long|struct[ \t]+[A-Za-z_]\w*|union[ \t]+[A-Za-z_]\w*|enum[ \t]+[A-Za-z_]\w*|[A-Za-z_]\w*)[ \t]+|\*[ \t]*)+)([A-Za-z_]\w*)[ \t]*\(([^;{}]*)\)[ \t\r\n]*\{/g;
 
 export function assertInside(root, candidate) {
   const resolvedRoot = path.resolve(root);
@@ -123,13 +124,76 @@ async function detectBuildSystem(root, files) {
   return null;
 }
 
-async function detectMainCandidates(root, cFiles) {
-  const candidates = [];
+function splitParameters(text) {
+  const value = String(text || '').trim();
+  if (!value || value === 'void') return [];
+  const parts = [];
+  let start = 0;
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === '(' || character === '[' || character === '{') depth += 1;
+    else if (character === ')' || character === ']' || character === '}') depth = Math.max(0, depth - 1);
+    else if (character === ',' && depth === 0) {
+      parts.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  parts.push(value.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
+function defaultExpressionForParameter(raw, type) {
+  if (/\bchar\b[\s\S]*\*/.test(type) || /\bchar\b[\s\S]*\[/.test(raw)) return '""';
+  if (/\b(struct|union)\s+[A-Za-z_]\w*/.test(type) && !/\*/.test(type)) return `(${type.trim()}){0}`;
+  if (/\*/.test(type) || /\[[^\]]*\]/.test(raw)) return '0';
+  if (/\b(float|double)\b/.test(type)) return '0.0';
+  if (/\bchar\b/.test(type)) return "'a'";
+  return '0';
+}
+
+function parseParameter(raw, index) {
+  const text = raw.trim();
+  if (text === '...') return { name: '...', type: '...', raw: text, variadic: true, defaultExpression: '' };
+  const nameMatch = text.match(/([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*$/);
+  const name = nameMatch?.[1] || `arg${index + 1}`;
+  const nameIndex = nameMatch ? nameMatch.index : text.length;
+  const arraySuffix = text.slice(nameIndex + (nameMatch?.[1]?.length || 0)).trim();
+  const type = `${text.slice(0, nameIndex).trim()}${arraySuffix ? ` ${arraySuffix}` : ''}`.trim() || text;
+  return { name, type, raw: text, variadic: false, defaultExpression: defaultExpressionForParameter(text, type) };
+}
+
+function functionsFromText(text, file) {
+  const functions = [];
+  const pattern = new RegExp(FUNCTION_DEFINITION_RE.source, FUNCTION_DEFINITION_RE.flags);
+  let match;
+  while ((match = pattern.exec(text))) {
+    const name = match[3];
+    if (['if', 'for', 'while', 'switch'].includes(name)) continue;
+    const signatureStart = match.index + match[1].length;
+    const line = text.slice(0, signatureStart).split('\n').length;
+    const returnType = match[2].replace(/\s+/g, ' ').trim();
+    const params = splitParameters(match[4]).map(parseParameter);
+    functions.push({
+      file,
+      line,
+      name,
+      returnType,
+      params: params.filter((param) => !param.variadic),
+      variadic: params.some((param) => param.variadic),
+      static: /(^|\s)static(\s|$)/.test(returnType)
+    });
+  }
+  return functions;
+}
+
+async function detectFunctions(root, cFiles) {
+  const functions = [];
   for (const file of cFiles) {
     const text = await readFile(path.join(root, file), 'utf8');
-    if (/\b(?:int|void)\s+main\s*\(/m.test(text)) candidates.push(file);
+    functions.push(...functionsFromText(text, file));
   }
-  return candidates;
+  return functions;
 }
 
 async function detectProfile(root, files) {
@@ -149,7 +213,8 @@ export async function inspectProject(root) {
   const cFiles = files.filter((file) => path.extname(file) === '.c');
   const headerFiles = files.filter((file) => path.extname(file) === '.h');
   const buildSystem = await detectBuildSystem(root, files);
-  const mainCandidates = await detectMainCandidates(root, cFiles);
+  const functions = await detectFunctions(root, cFiles);
+  const mainCandidates = [...new Set(functions.filter((fn) => fn.name === 'main').map((fn) => fn.file))];
   const profile = await detectProfile(root, files);
   const includeDirs = [...new Set(headerFiles.map((file) => path.dirname(file)).filter((dir) => dir !== '.'))].sort();
 
@@ -157,6 +222,7 @@ export async function inspectProject(root) {
     files,
     cFiles,
     headerFiles,
+    functions,
     mainCandidates,
     buildSystem,
     profile,
@@ -222,7 +288,72 @@ async function detectExecutable(runtimeDir, analysis, preferred = null) {
   return executables[0];
 }
 
-export async function prepareBuild({ sourceDir, runtimeDir }) {
+function resolveEntryPoint(analysis, requestedEntry = null) {
+  const functions = analysis.functions.filter((fn) => fn.name !== 'main');
+  if (analysis.mainCandidates.length && (!requestedEntry || requestedEntry.kind !== 'function')) {
+    return { kind: 'main', name: 'main', file: analysis.mainCandidates[0], breakpoint: 'main', args: [] };
+  }
+
+  let target = null;
+  if (requestedEntry?.kind === 'function') {
+    target = functions.find((fn) => fn.name === requestedEntry.name && fn.file === requestedEntry.file);
+    if (!target) throw new CVisError('ENTRYPOINT_NOT_FOUND', 'The selected function could not be found in the uploaded source', {
+      stage: 'build',
+      status: 422,
+      details: { name: requestedEntry.name ?? null, file: requestedEntry.file ?? null }
+    });
+  } else if (!analysis.mainCandidates.length && functions.length === 1) {
+    target = functions[0];
+  } else if (!analysis.mainCandidates.length && functions.length > 1) {
+    throw new CVisError('ENTRYPOINT_REQUIRED', 'Choose which function c_vis should visualize', {
+      stage: 'build',
+      status: 409,
+      retryable: true,
+      details: { functions: functions.map(({ file, line, name, returnType, params, variadic }) => ({ file, line, name, returnType, params, variadic })) }
+    });
+  } else if (!analysis.mainCandidates.length) {
+    throw new CVisError('NO_EXECUTABLE_CODE', 'No runnable function definition was detected in the uploaded C code', { stage: 'build', status: 422 });
+  }
+
+  const supplied = Array.isArray(requestedEntry?.args) ? requestedEntry.args.map((value) => String(value).trim()) : [];
+  const args = target.params.map((param, index) => supplied[index] || param.defaultExpression || '0');
+  if (target.variadic && supplied.length > target.params.length) args.push(...supplied.slice(target.params.length));
+  return {
+    kind: 'function',
+    file: target.file,
+    line: target.line,
+    name: target.name,
+    returnType: target.returnType,
+    params: target.params,
+    variadic: target.variadic,
+    args,
+    breakpoint: `${target.file}:${target.line}`
+  };
+}
+
+function escapeIncludePath(value) {
+  return String(value).replaceAll('\\', '/').replaceAll('"', '\\"');
+}
+
+async function writeHarness(runtimeDir, entry) {
+  const harnessPath = '__cvis_harness.c';
+  const callArguments = entry.args.map((value) => value || '0').join(', ');
+  const content = [
+    '/* Generated by c_vis in the disposable runtime workspace. */',
+    `#include "${escapeIncludePath(entry.file)}"`,
+    '',
+    'int main(void)',
+    '{',
+    `    ${entry.name}(${callArguments});`,
+    '    return 0;',
+    '}',
+    ''
+  ].join('\n');
+  await writeFile(path.join(runtimeDir, harnessPath), content, 'utf8');
+  return harnessPath;
+}
+
+export async function prepareBuild({ sourceDir, runtimeDir, entry = null }) {
   await rm(runtimeDir, { recursive: true, force: true });
   await mkdir(runtimeDir, { recursive: true });
   await cp(sourceDir, runtimeDir, {
@@ -237,10 +368,10 @@ export async function prepareBuild({ sourceDir, runtimeDir }) {
 
   const analysis = await inspectProject(runtimeDir);
   if (!analysis.cFiles.length) throw new CVisError('NO_C_SOURCE', 'No C source files were found in the project', { stage: 'build', status: 422 });
-  if (!analysis.mainCandidates.length) throw new CVisError('MAIN_NOT_FOUND', 'No main() function was detected', { stage: 'build', status: 422 });
+  const resolvedEntry = resolveEntryPoint(analysis, entry);
 
   let result;
-  if (analysis.buildSystem?.type === 'make') {
+  if (resolvedEntry.kind === 'main' && analysis.buildSystem?.type === 'make') {
     const flags = debugCFlags(analysis.buildSystem.cflags);
     const args = ['-B'];
     if (analysis.buildSystem.hasRe) args.push('re');
@@ -249,13 +380,18 @@ export async function prepareBuild({ sourceDir, runtimeDir }) {
   } else {
     const args = ['-g', '-O0', '-Wall', '-Wextra'];
     for (const dir of analysis.buildPlan.includeDirs || []) args.push(`-I${dir}`);
-    args.push(...analysis.cFiles, '-o', 'cvis_program');
+    if (resolvedEntry.kind === 'function') {
+      const harness = await writeHarness(runtimeDir, resolvedEntry);
+      args.push(...analysis.cFiles.filter((file) => file !== resolvedEntry.file), harness, '-o', 'cvis_program');
+    } else {
+      args.push(...analysis.cFiles, '-o', 'cvis_program');
+    }
     result = await runBuild('cc', args, runtimeDir);
   }
 
-  if (!result.ok) return { ...result, analysis, executable: null };
-  const executable = await detectExecutable(runtimeDir, analysis);
-  return { ...result, analysis, executable };
+  if (!result.ok) return { ...result, analysis, entry: resolvedEntry, executable: null };
+  const executable = await detectExecutable(runtimeDir, analysis, resolvedEntry.kind === 'function' ? 'cvis_program' : null);
+  return { ...result, analysis, entry: resolvedEntry, executable };
 }
 
 export function toProjectRelative(runtimeDir, filePath) {
