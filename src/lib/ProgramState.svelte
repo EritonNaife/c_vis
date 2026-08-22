@@ -41,17 +41,6 @@
     {#if completed}<span class="state-badge complete">final state</span>{/if}
   </div>
 
-  {#if snapshot?.locals?.length}
-    <section class="locals-strip" aria-label="Local variables">
-      {#each snapshot.locals as local (local.name)}
-        <button class:pointer={isPointer(local.value)} class="local-card" type="button" title={local.type ?? local.name}>
-          <span class="local-name">{local.name}</span>
-          <strong>{localValue(local)}</strong>
-        </button>
-      {/each}
-    </section>
-  {/if}
-
   {#if pushSwap && initialized}
     <section class="push-swap-visual">
       <div class="stacks-grid">
@@ -76,11 +65,18 @@
         <div><span>operations</span><strong>—</strong></div>
       </div>
     </section>
-  {/if}
-
-  {#if runtime?.roots?.length && !(pushSwap && initialized)}
+  {:else if runtime?.roots?.length}
     <RuntimeVisualizer {runtime} {previousRuntime} />
-  {:else if !pushSwap}
+  {:else if snapshot?.locals?.length}
+    <section class="locals-strip" aria-label="Local variables">
+      {#each snapshot.locals as local (local.name)}
+        <button class:pointer={isPointer(local.value)} class="local-card" type="button" title={local.type ?? local.name}>
+          <span class="local-name">{local.name}</span>
+          <strong>{localValue(local)}</strong>
+        </button>
+      {/each}
+    </section>
+  {:else}
     <section class="generic-state">
       <p>{runtime?.reason ?? 'Runtime data will appear as the program creates and uses it.'}</p>
     </section>
