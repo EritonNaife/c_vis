@@ -3,8 +3,6 @@ services:
     build: .
     ports:
       - "4173:4173"
-    tmpfs:
-      - /workspace/projects
     environment:
       CVIS_WORKSPACE_ROOT: /workspace/projects
       CVIS_TRACE_LIMIT: "${CVIS_TRACE_LIMIT:-5000}"
