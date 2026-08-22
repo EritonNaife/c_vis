@@ -5,11 +5,6 @@
 
   const pushSwap = $derived(snapshot?.pushSwap?.available ? snapshot.pushSwap : null);
   const previousPushSwap = $derived(previousSnapshot?.pushSwap?.available ? previousSnapshot.pushSwap : null);
-  const operation = $derived.by(() => {
-    const current = snapshot?.operations ?? [];
-    const previous = previousSnapshot?.operations ?? [];
-    return current.length > previous.length ? current[current.length - 1] : null;
-  });
   const strategyNames = ['adaptive', 'simple', 'medium', 'complex'];
 
   function isPointer(value) {
@@ -23,21 +18,15 @@
       <span class="eyebrow">program state</span>
       <h2>{snapshot?.frame?.func ?? 'program'}</h2>
     </div>
-    {#if operation}
-      <div class="operation-chip">
-        <span>operation</span>
-        <strong>{operation}</strong>
-      </div>
-    {/if}
   </div>
 
   {#if snapshot?.locals?.length}
     <section class="locals-strip" aria-label="Local variables">
       {#each snapshot.locals as local (local.name)}
-        <div class:pointer={isPointer(local.value)} class="local-card">
+        <button class:pointer={isPointer(local.value)} class="local-card" type="button" title={local.type ?? local.name}>
           <span class="local-name">{local.name}</span>
           <strong>{local.value ?? '—'}</strong>
-        </div>
+        </button>
       {/each}
     </section>
   {/if}
@@ -57,7 +46,7 @@
     </section>
   {:else}
     <section class="generic-state">
-      <p>{snapshot?.pushSwap?.reason ?? 'Program-specific visualization will appear when recognizable structures enter scope.'}</p>
+      <p>{snapshot?.pushSwap?.reason ?? 'Program-specific structures will appear when they enter scope.'}</p>
     </section>
   {/if}
 </div>
