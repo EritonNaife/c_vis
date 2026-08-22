@@ -1,0 +1,44 @@
+.workspace:has(.project-tree.collapsed) {
+  grid-template-columns: 44px minmax(420px, 1fr) 500px;
+}
+
+.project-heading {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.project-collapse-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: 18px/1 var(--mono);
+}
+
+.project-collapse-button:hover {
+  border-color: var(--outline);
+  background: var(--surface-high);
+  color: var(--text);
+}
+
+.project-tree.collapsed .project-heading {
+  flex-basis: 49px;
+  justify-content: center;
+  padding: 0;
+}
+
+.project-tree.collapsed .project-collapse-button {
+  width: 32px;
+  height: 32px;
+}
+
+@media (max-width: 1320px) {
+  .workspace:has(.project-tree.collapsed) {
+    grid-template-columns: 44px minmax(400px, 1fr) 450px;
+  }
+}
