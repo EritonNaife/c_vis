@@ -1,5 +1,9 @@
+.workspace {
+  grid-template-columns: 240px minmax(360px, 1fr) var(--visual-width, 500px);
+}
+
 .workspace:has(.project-tree.collapsed) {
-  grid-template-columns: 44px minmax(420px, 1fr) 500px;
+  grid-template-columns: 44px minmax(360px, 1fr) var(--visual-width, 500px);
 }
 
 .project-heading {
@@ -37,8 +41,58 @@
   height: 32px;
 }
 
+.visual-pane {
+  position: relative;
+  min-width: 360px;
+}
+
+.visual-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  z-index: 25;
+  width: 12px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.visual-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: var(--outline);
+  transition: width .12s ease, background .12s ease, box-shadow .12s ease;
+}
+
+.visual-resizer:hover::before,
+.visual-resizer:focus-visible::before,
+.visual-resizer.active::before {
+  left: 4px;
+  width: 3px;
+  background: var(--primary);
+  box-shadow: 0 0 0 1px rgba(75, 226, 119, .12);
+}
+
+body.visual-resizing,
+body.visual-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 @media (max-width: 1320px) {
+  .workspace {
+    grid-template-columns: 220px minmax(340px, 1fr) var(--visual-width, 450px);
+  }
+
   .workspace:has(.project-tree.collapsed) {
-    grid-template-columns: 44px minmax(400px, 1fr) 450px;
+    grid-template-columns: 44px minmax(340px, 1fr) var(--visual-width, 450px);
   }
 }
