@@ -4,6 +4,20 @@
   font: 500 11px var(--mono);
 }
 
+.entry-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 180px;
+  padding: 7px 10px;
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  background: var(--surface-lowest);
+  font: 10px var(--mono);
+}
+.entry-chip strong { color: var(--text); }
+.entry-chip span { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .07em; }
+
 .project-import {
   display: grid;
   flex: 1;
@@ -44,6 +58,40 @@
 .import-actions button.primary { border-color: var(--primary); background: var(--primary); }
 .import-status { margin-top: 16px; color: var(--primary); font: 500 10px var(--mono); text-align: center; }
 .hidden-input { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.entry-point-panel {
+  width: min(520px, 100%);
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--outline);
+  border-radius: 9px;
+  background: var(--surface-container);
+  text-align: left;
+}
+.entry-point-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, .7fr); gap: 18px; align-items: end; }
+.entry-point-heading h3, .entry-unavailable h3 { margin: 4px 0 5px; font-size: 14px; }
+.entry-point-heading p, .entry-unavailable p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.entry-point-heading label, .entry-arguments label { display: grid; gap: 5px; }
+.entry-point-heading label > span { color: var(--muted); font: 8px var(--mono); text-transform: uppercase; letter-spacing: .07em; }
+.entry-point-panel select,
+.entry-point-panel input {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--outline);
+  border-radius: 5px;
+  background: var(--surface-lowest);
+  color: var(--text);
+  font: 10px var(--mono);
+}
+.entry-signature { display: block; overflow: auto; margin-top: 14px; padding: 9px 10px; border-radius: 5px; background: var(--surface-lowest); color: var(--primary); font: 10px/1.45 var(--mono); white-space: nowrap; }
+.entry-arguments { display: grid; gap: 8px; margin-top: 12px; }
+.entry-arguments label { grid-template-columns: minmax(120px, .8fr) minmax(0, 1fr); align-items: center; }
+.entry-arguments label > span { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.entry-arguments strong { font: 600 10px var(--mono); }
+.entry-arguments small { overflow: hidden; color: var(--muted); font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.entry-help { display: block; margin-top: 10px; color: #7f8c80; font: 8px/1.5 var(--mono); }
+.entry-zero-args { margin-top: 12px; padding: 9px 10px; border: 1px solid var(--outline); border-radius: 5px; color: var(--muted); font: 9px var(--mono); }
+.entry-unavailable { padding: 4px 0; }
 
 .structured-error {
   z-index: 65;
@@ -93,4 +141,5 @@
 @media (max-width: 1180px) {
   .import-card { width: min(620px, 86vw); }
   .diagnostics-drawer { width: min(620px, 68vw); }
+  .entry-point-heading { grid-template-columns: 1fr; align-items: stretch; }
 }
