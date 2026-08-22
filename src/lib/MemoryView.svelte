@@ -1,5 +1,8 @@
 <script>
+  import RuntimeMemory from './RuntimeMemory.svelte';
+
   let { snapshot } = $props();
+  const runtime = $derived(snapshot?.runtime?.available ? snapshot.runtime : null);
   const pushSwap = $derived(snapshot?.pushSwap?.available ? snapshot.pushSwap : null);
   const initialized = $derived(pushSwap ? pushSwap.initialized !== false : false);
   const completed = $derived(snapshot?.status === 'exited');
@@ -26,11 +29,13 @@
         {/each}
       </div>
     {:else}
-      <div class="memory-note">{completed ? 'The process has exited, so stack-frame locals are no longer live.' : 'No locals in the current frame.'}</div>
+      <div class="memory-note">{completed ? 'The live frame is gone; c_vis preserved the last reachable runtime graph below.' : 'No locals in the current frame.'}</div>
     {/if}
   </section>
 
-  {#if pushSwap && initialized}
+  {#if runtime}
+    <RuntimeMemory {runtime} />
+  {:else if pushSwap && initialized}
     <section class="memory-section">
       <h3>{completed ? 'Final linked nodes' : 'Linked nodes'}</h3>
       <div class="node-memory-grid">
