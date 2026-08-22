@@ -166,7 +166,7 @@ test('memory model keeps local arrays in frames and resolves pointers into subob
   assert.equal(model.referencedObjects.length, 0);
   const strReference = model.references.find((reference) => reference.source === 'reverse_string.str');
   assert.equal(strReference.targetLocation.kind, 'element');
-  assert.equal(strReference.targetLocation.label, 'char [3][1]');
+  assert.equal(strReference.targetLocation.label, 'main.greeting[1]');
 });
 
 test('diffs scalar, object and pointer transitions between snapshots', () => {
