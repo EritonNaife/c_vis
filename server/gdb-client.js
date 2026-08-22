@@ -2,18 +2,6 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { parseMiLine, miQuote } from './mi.js';
 
-const OPERATION_RE = /^(sa|sb|ss|pa|pb|ra|rb|rr|rra|rrb|rrr)$/;
-const PUSH_SWAP_TRACE_SKIP_FILES = ['src/utils.c', 'src/print_numbers.c', 'src/benchmark.c'];
-const PUSH_SWAP_TRACE_SKIP_FUNCTIONS = [
-  'ft_strlen',
-  'ft_strcmp',
-  'ft_isspace',
-  'ft_isdigit',
-  'ft_putstr_fd',
-  'ft_putnbr_fd',
-  'ft_put_percent_fd'
-];
-
 function unwrapList(value, key) {
   if (!Array.isArray(value)) return [];
   return value.map((entry) => entry?.[key] ?? entry).filter(Boolean);
@@ -31,12 +19,26 @@ function executionTimeout(command, timeoutMs) {
 }
 
 export class GdbClient extends EventEmitter {
-  constructor({ cwd, executable, args = [], adapterScript = null, stopTimeoutMs = 30000 }) {
+  constructor({
+    cwd,
+    executable,
+    args = [],
+    adapterScript = null,
+    adapterCommand = null,
+    adapterStatePrefix = null,
+    tracePolicy = null,
+    entryBreakpoint = 'main',
+    stopTimeoutMs = 30000
+  }) {
     super();
     this.cwd = cwd;
     this.executable = executable;
     this.args = args;
     this.adapterScript = adapterScript;
+    this.adapterCommand = adapterCommand;
+    this.adapterStatePrefix = adapterStatePrefix;
+    this.tracePolicy = tracePolicy || { skipFiles: [], skipFunctions: [] };
+    this.entryBreakpoint = entryBreakpoint || 'main';
     this.stopTimeoutMs = stopTimeoutMs;
     this.proc = null;
     this.buffer = '';
@@ -46,7 +48,7 @@ export class GdbClient extends EventEmitter {
     this.consoleLines = [];
     this.targetLines = [];
     this.lastStop = null;
-    this.lastPushSwap = null;
+    this.lastAdapterState = null;
     this.gdbExited = false;
     this.inferiorExited = false;
     this.running = false;
@@ -68,6 +70,7 @@ export class GdbClient extends EventEmitter {
       for (const pending of this.pending.values()) pending.reject(error);
       this.pending.clear();
       for (const waiter of this.stopWaiters.splice(0)) waiter.resolve({ reason: 'gdb-exited' });
+      this.emit('exit', { code, signal });
     });
 
     await this.command('-gdb-set pagination off');
@@ -76,20 +79,18 @@ export class GdbClient extends EventEmitter {
     await this.command(`-environment-cd ${miQuote(this.cwd)}`);
     await this.command(`-file-exec-and-symbols ${miQuote(this.executable)}`);
     if (this.args.length) await this.command(`-exec-arguments ${this.args.map(miQuote).join(' ')}`);
+
     if (this.adapterScript) {
       await this.command(`-interpreter-exec console ${miQuote(`source ${this.adapterScript}`)}`);
-      // Source-level tracing should show the target's decisions, not spend a
-      // step on the output/formatting helpers called by every operation.
-      // GDB's skip list keeps `-exec-step` inside the algorithm while stepping
-      // over these helper calls reliably (including libc calls they make).
-      for (const file of PUSH_SWAP_TRACE_SKIP_FILES) {
-        await this.command(`-interpreter-exec console ${miQuote(`skip file ${file}`)}`);
-      }
-      for (const func of PUSH_SWAP_TRACE_SKIP_FUNCTIONS) {
-        await this.command(`-interpreter-exec console ${miQuote(`skip function ${func}`)}`);
-      }
     }
-    await this.command('-break-insert main');
+    for (const file of this.tracePolicy.skipFiles || []) {
+      await this.command(`-interpreter-exec console ${miQuote(`skip file ${file}`)}`);
+    }
+    for (const func of this.tracePolicy.skipFunctions || []) {
+      await this.command(`-interpreter-exec console ${miQuote(`skip function ${func}`)}`);
+    }
+
+    await this.command(`-break-insert ${miQuote(this.entryBreakpoint)}`);
     await this.exec('-exec-run');
     return this.snapshot();
   }
@@ -100,7 +101,9 @@ export class GdbClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(token);
-        reject(new Error(`GDB command timed out: ${command}`));
+        const error = new Error(`GDB command timed out: ${command}`);
+        error.code = 'GDB_COMMAND_TIMEOUT';
+        reject(error);
       }, timeoutMs);
       this.pending.set(token, {
         resolve: (record) => { clearTimeout(timer); resolve(record); },
@@ -144,7 +147,7 @@ export class GdbClient extends EventEmitter {
 
   async snapshot() {
     if (this.inferiorExited) {
-      const pushSwap = this.adapterScript ? await this.#readPushSwapState() : null;
+      const adapterState = this.adapterCommand ? await this.#readAdapterState() : null;
       return {
         status: 'exited',
         stop: this.lastStop,
@@ -152,8 +155,7 @@ export class GdbClient extends EventEmitter {
         frames: [],
         locals: [],
         targetOutput: this.targetLines.join(''),
-        operations: this.#operations(),
-        pushSwap: pushSwap ?? this.lastPushSwap
+        adapterState: adapterState ?? this.lastAdapterState
       };
     }
 
@@ -163,7 +165,7 @@ export class GdbClient extends EventEmitter {
       this.command('-stack-list-variables --simple-values')
     ]);
 
-    const pushSwap = this.adapterScript ? await this.#readPushSwapState() : null;
+    const adapterState = this.adapterCommand ? await this.#readAdapterState() : null;
 
     return {
       status: 'paused',
@@ -172,8 +174,7 @@ export class GdbClient extends EventEmitter {
       frames: unwrapList(stackRecord.results.stack, 'frame'),
       locals: unwrapList(localsRecord.results.variables, 'variable'),
       targetOutput: this.targetLines.join(''),
-      operations: this.#operations(),
-      pushSwap
+      adapterState
     };
   }
 
@@ -188,28 +189,21 @@ export class GdbClient extends EventEmitter {
     this.running = false;
   }
 
-  async #readPushSwapState() {
+  async #readAdapterState() {
+    if (!this.adapterCommand || !this.adapterStatePrefix) return null;
     const startIndex = this.consoleLines.length;
     try {
-      await this.command(`-interpreter-exec console ${miQuote('cvis-push-swap-state')}`);
+      await this.command(`-interpreter-exec console ${miQuote(this.adapterCommand)}`);
       const added = this.consoleLines.slice(startIndex);
-      const stateLine = [...added].reverse().find((line) => line.startsWith('CVIS_PUSH_SWAP_STATE '));
-      if (!stateLine) return this.lastPushSwap;
-      const state = JSON.parse(stateLine.slice('CVIS_PUSH_SWAP_STATE '.length));
-      if (state?.available && state.initialized !== false) this.lastPushSwap = state;
+      const stateLine = [...added].reverse().find((line) => line.startsWith(this.adapterStatePrefix));
+      if (!stateLine) return this.lastAdapterState;
+      const state = JSON.parse(stateLine.slice(this.adapterStatePrefix.length));
+      if (state?.available && state.initialized !== false) this.lastAdapterState = state;
       return state;
     } catch (error) {
-      if (this.lastPushSwap) return this.lastPushSwap;
+      if (this.lastAdapterState) return this.lastAdapterState;
       return { available: false, reason: error.message };
     }
-  }
-
-  #operations() {
-    return this.targetLines
-      .join('')
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => OPERATION_RE.test(line));
   }
 
   #waitForStop(command, timeoutMs) {

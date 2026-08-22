@@ -14,11 +14,10 @@ COPY server ./server
 RUN npm run build
 
 ENV PORT=4173 \
-    CVIS_SOURCE_DIR=/workspace/source \
-    CVIS_RUNTIME_DIR=/workspace/run \
-    CVIS_EXECUTABLE=./push_swap \
-    CVIS_ADAPTER=push_swap \
-    CVIS_TRACE_LIMIT=5000
+    CVIS_WORKSPACE_ROOT=/workspace/projects \
+    CVIS_TRACE_LIMIT=5000 \
+    CVIS_GDB_STOP_TIMEOUT_MS=30000 \
+    CVIS_MAX_UPLOAD_BYTES=36700160
 
 EXPOSE 4173
 CMD ["npm", "start"]

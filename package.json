@@ -1,8 +1,8 @@
 {
   "name": "c_vis",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "Visual execution for C programs, powered by GDB.",
+  "description": "Browser-first C execution visualizer powered by native GDB.",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
