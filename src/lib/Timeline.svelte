@@ -14,12 +14,42 @@
     onNavigate
   } = $props();
 
-  const stepNumber = $derived(total ? index + 1 : 0);
+  let draftIndex = $state(0);
+  let dragging = $state(false);
+  let committing = $state(false);
+
+  // Keep the thumb independent while the pointer is moving. The parent only
+  // receives one navigation request after the user releases the slider.
+  $effect(() => {
+    if (!dragging && !committing) draftIndex = Math.max(0, index);
+  });
+
+  const displayedIndex = $derived(dragging || committing ? draftIndex : Math.max(0, index));
+  const stepNumber = $derived(total ? displayedIndex + 1 : 0);
   const traceStatus = $derived(trace?.status ?? (complete ? 'complete' : 'partial'));
   const tracing = $derived(traceStatus === 'running');
-  const atEnd = $derived(total > 0 && complete && index >= total - 1);
+  const atEnd = $derived(total > 0 && complete && displayedIndex >= total - 1);
   const limitReached = $derived(traceStatus === 'limit');
   const resumeLabel = $derived(['timed_out', 'cancelled', 'error'].includes(traceStatus));
+  const navigationLocked = $derived(busy || tracing || dragging || committing);
+
+  function updateDraft(event) {
+    dragging = true;
+    draftIndex = Number(event.currentTarget.value);
+  }
+
+  async function commitDraft() {
+    if (!dragging) return;
+    const target = draftIndex;
+    dragging = false;
+    committing = true;
+    try {
+      if (target !== index) await onNavigate?.(target);
+    } finally {
+      committing = false;
+      draftIndex = Math.max(0, index);
+    }
+  }
 
   function traceMessage() {
     if (!active) return 'Build & start to observe execution';
@@ -36,12 +66,22 @@
 <footer class="timeline-panel">
   <div class="timeline-row">
     <div class="timeline-buttons">
-      <button onclick={onFirst} disabled={busy || tracing || !active || index <= 0} aria-label="First execution step">|&lt; <span>First</span></button>
-      <button onclick={onPrevious} disabled={busy || tracing || !active || index <= 0} aria-label="Previous execution step">&lt; <span>Previous</span></button>
+      <button onclick={onFirst} disabled={navigationLocked || !active || displayedIndex <= 0} aria-label="First execution step">|&lt; <span>First</span></button>
+      <button onclick={onPrevious} disabled={navigationLocked || !active || displayedIndex <= 0} aria-label="Previous execution step">&lt; <span>Previous</span></button>
     </div>
 
     <div class="timeline-track-wrap">
-      <input aria-label="Execution timeline" type="range" min="0" max={Math.max(0, total - 1)} value={Math.max(0, index)} disabled={busy || tracing || !active || total <= 1} oninput={(event) => onNavigate?.(Number(event.currentTarget.value))} />
+      <input
+        aria-label="Execution timeline"
+        aria-valuetext={`Step ${stepNumber} of ${total}`}
+        type="range"
+        min="0"
+        max={Math.max(0, total - 1)}
+        value={displayedIndex}
+        disabled={busy || tracing || committing || !active || total <= 1}
+        oninput={updateDraft}
+        onchange={commitDraft}
+      />
       <div class="step-label">
         {#if active}<strong>Step {stepNumber}</strong><span>of {total}{complete ? '' : ' observed'}</span>{:else}<span>Build & start to observe execution</span>{/if}
       </div>
@@ -49,11 +89,11 @@
     </div>
 
     <div class="timeline-buttons">
-      <button onclick={onNext} disabled={busy || tracing || !active || atEnd} aria-label="Next execution step"><span>Next</span> &gt;</button>
+      <button onclick={onNext} disabled={navigationLocked || !active || atEnd} aria-label="Next execution step"><span>Next</span> &gt;</button>
       {#if tracing}
         <button class="cancel-trace" onclick={onCancel} disabled={busy} aria-label="Cancel trace">Cancel</button>
       {:else}
-        <button onclick={onLast} disabled={busy || !active || atEnd || limitReached} aria-label={resumeLabel ? 'Resume trace' : 'Last execution step'}><span>{resumeLabel ? 'Resume' : 'Last'}</span> &gt;|</button>
+        <button onclick={onLast} disabled={navigationLocked || !active || atEnd || limitReached} aria-label={resumeLabel ? 'Resume trace' : 'Last execution step'}><span>{resumeLabel ? 'Resume' : 'Last'}</span> &gt;|</button>
       {/if}
     </div>
   </div>
