@@ -71,6 +71,13 @@ function isOutsideProject(snapshot) {
   return !projectPath || path.isAbsolute(projectPath);
 }
 
+function resetExecutionState() {
+  history = [];
+  cursor = -1;
+  traceComplete = false;
+  traceLimitReached = false;
+}
+
 function sessionPayload() {
   if (cursor < 0 || !history.length) return null;
   return {
@@ -100,14 +107,23 @@ async function buildProject() {
 async function stopDebugger() {
   if (debuggerClient) await debuggerClient.stop();
   debuggerClient = null;
-  history = [];
-  cursor = -1;
-  traceComplete = false;
-  traceLimitReached = false;
+}
+
+async function launchDebugger(args) {
+  resetExecutionState();
+  debuggerClient = new GdbClient({
+    cwd: config.runtimeDir,
+    executable: config.executable,
+    args,
+    adapterScript: config.adapter === 'push_swap' ? adapterPath : null
+  });
+  appendSnapshot(normalizeSnapshot(await debuggerClient.start()));
+  return sessionPayload();
 }
 
 async function startSession(args) {
   await stopDebugger();
+  resetExecutionState();
   const build = await buildProject();
   if (!build.ok) {
     const error = new Error('Build failed');
@@ -116,15 +132,15 @@ async function startSession(args) {
   }
 
   lastArgs = args;
-  debuggerClient = new GdbClient({
-    cwd: config.runtimeDir,
-    executable: config.executable,
-    args,
-    adapterScript: config.adapter === 'push_swap' ? adapterPath : null
-  });
+  const session = await launchDebugger(args);
+  return { build, session };
+}
 
-  appendSnapshot(normalizeSnapshot(await debuggerClient.start()));
-  return { build, session: sessionPayload() };
+async function restartSession() {
+  if (!lastBuild?.ok) return startSession(lastArgs);
+  await stopDebugger();
+  const session = await launchDebugger(lastArgs);
+  return { build: lastBuild, session };
 }
 
 async function captureNextSnapshot() {
@@ -177,6 +193,16 @@ async function performAction(action) {
   throw new Error(`Unknown execution action: ${action}`);
 }
 
+async function performDebugAction(action) {
+  if (!debuggerClient || !history.length) throw new Error('No active debug session');
+  if (traceComplete) return;
+  if (!['step', 'next', 'finish', 'continue'].includes(action)) throw new Error(`Unknown debugger action: ${action}`);
+
+  cursor = history.length - 1;
+  const snapshot = normalizeSnapshot(await debuggerClient.action(action));
+  appendSnapshot(snapshot);
+}
+
 async function api(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/project') {
     const files = await listSourceFiles(config.sourceDir);
@@ -184,6 +210,7 @@ async function api(req, res, url) {
       sourceDir: config.sourceDir,
       executable: config.executable,
       adapter: config.adapter,
+      traceLimit: config.traceLimit,
       files,
       defaults: { args: ['4', '67', '3', '87', '23'] },
       lastBuild
@@ -217,6 +244,16 @@ async function api(req, res, url) {
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/session/debug') {
+    const payload = await body(req);
+    try {
+      await performDebugAction(payload.action);
+      return json(res, 200, { session: sessionPayload() });
+    } catch (error) {
+      return json(res, 400, { error: error.message, session: sessionPayload() });
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/session/navigate') {
     if (!history.length) return json(res, 409, { error: 'No active debug session' });
     const payload = await body(req);
@@ -228,7 +265,7 @@ async function api(req, res, url) {
 
   if (req.method === 'POST' && url.pathname === '/api/session/restart') {
     try {
-      return json(res, 200, await startSession(lastArgs));
+      return json(res, 200, await restartSession());
     } catch (error) {
       return json(res, 400, { error: error.message, build: error.build ?? lastBuild });
     }
