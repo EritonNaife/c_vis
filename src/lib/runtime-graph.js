@@ -16,6 +16,7 @@ function pointerFields(object) {
 function sameTypePointerFields(runtime, object) {
   const objects = mapObjects(runtime);
   return pointerFields(object).filter((field) => {
+    if (field.value?.pointeeType === object.type) return true;
     const target = field.value?.object ?? field.value?.target;
     if (!target) return false;
     const targetObject = objects.get(target);
