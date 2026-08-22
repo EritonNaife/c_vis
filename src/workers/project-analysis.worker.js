@@ -84,32 +84,92 @@ function detectProfile(files) {
   return 'generic';
 }
 
+function cleanDeclaration(value) {
+  return String(value || '')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/.*$/gm, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function extractStructs(files) {
   const structs = [];
   const seen = new Set();
   const pattern = /(?:typedef\s+)?struct\s+([A-Za-z_]\w*)?\s*\{([\s\S]*?)\}\s*([A-Za-z_]\w*)?\s*;/g;
   for (const file of files) {
+    const localPattern = new RegExp(pattern.source, pattern.flags);
     let match;
-    while ((match = pattern.exec(file.content))) {
+    while ((match = localPattern.exec(file.content))) {
       const name = match[3] || match[1] || 'anonymous';
       const key = `${file.path}:${name}:${match.index}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      const line = file.content.slice(0, match.index).split('\n').length;
       const fields = match[2]
         .split(';')
-        .map((line) => line.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/g, '').trim())
+        .map(cleanDeclaration)
         .filter(Boolean)
-        .slice(0, 24);
-      structs.push({ name, file: file.path, fields, recursivePointer: new RegExp(`(?:struct\\s+${match[1] || name}|${name})\\s*\\*`, 'm').test(match[2]) });
+        .slice(0, 48);
+      const declaredTag = match[1] || name;
+      const recursivePointer = new RegExp(`(?:struct\\s+${declaredTag}|${name})\\s*\\*`, 'm').test(match[2]);
+      structs.push({ name, tag: match[1] || null, file: file.path, line, fields, recursivePointer });
     }
   }
-  return structs.slice(0, 80);
+  return structs.slice(0, 100);
+}
+
+function extractEnums(files) {
+  const enums = [];
+  const pattern = /(?:typedef\s+)?enum\s+([A-Za-z_]\w*)?\s*\{([\s\S]*?)\}\s*([A-Za-z_]\w*)?\s*;/g;
+  for (const file of files) {
+    const localPattern = new RegExp(pattern.source, pattern.flags);
+    let match;
+    while ((match = localPattern.exec(file.content))) {
+      const name = match[3] || match[1] || 'anonymous enum';
+      const line = file.content.slice(0, match.index).split('\n').length;
+      const members = cleanDeclaration(match[2]).split(',').map((member) => member.trim()).filter(Boolean).slice(0, 64);
+      enums.push({ name, tag: match[1] || null, file: file.path, line, members });
+    }
+  }
+  return enums.slice(0, 100);
+}
+
+function extractTypedefs(files) {
+  const aliases = [];
+  const pattern = /(^|\n)\s*typedef\s+([^;{}]+?)\s+([A-Za-z_]\w*)\s*;/g;
+  for (const file of files) {
+    const localPattern = new RegExp(pattern.source, pattern.flags);
+    let match;
+    while ((match = localPattern.exec(file.content))) {
+      const target = cleanDeclaration(match[2]);
+      const name = match[3];
+      if (!target || /\([^)]*\*[^)]*\)/.test(target)) continue;
+      const line = file.content.slice(0, match.index + match[1].length).split('\n').length;
+      aliases.push({ name, target, file: file.path, line });
+    }
+  }
+  return aliases.slice(0, 160);
+}
+
+function extractDefines(files) {
+  const defines = [];
+  const pattern = /^\s*#\s*define\s+([A-Za-z_]\w*)(?!\s*\()\s*(.*?)\s*$/gm;
+  for (const file of files) {
+    const localPattern = new RegExp(pattern.source, pattern.flags);
+    let match;
+    while ((match = localPattern.exec(file.content))) {
+      const line = file.content.slice(0, match.index).split('\n').length;
+      defines.push({ name: match[1], value: cleanDeclaration(match[2]) || '1', file: file.path, line });
+    }
+  }
+  return defines.slice(0, 200);
 }
 
 function analyze(files) {
   const started = performance.now();
   const cFiles = files.filter((file) => extension(file.path) === '.c');
   const headerFiles = files.filter((file) => extension(file.path) === '.h');
+  const sourceFiles = [...cFiles, ...headerFiles];
   const makefile = files.find((file) => /(^|\/)(Makefile|makefile|GNUmakefile)$/.test(file.path));
   const buildSystem = makefileAnalysis(makefile);
   const functions = extractFunctions(cFiles);
@@ -117,11 +177,17 @@ function analyze(files) {
   const callableFunctions = functions.filter((fn) => fn.name !== 'main');
   const includeDirs = [...new Set(headerFiles.map((file) => file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '.'))].sort();
   const profile = detectProfile(files);
-  const structs = extractStructs([...cFiles, ...headerFiles]);
+  const structs = extractStructs(sourceFiles);
+  const enums = extractEnums(sourceFiles);
+  const typedefs = extractTypedefs(sourceFiles);
+  const defines = extractDefines(sourceFiles);
+  const staticDeclarations = structs.length + enums.length + typedefs.length + defines.length;
   const warnings = [];
-  if (!cFiles.length) warnings.push('No .c files found.');
+  if (!cFiles.length && staticDeclarations) warnings.push('No executable .c source found. c_vis is showing a static structural visualization in the browser.');
+  else if (!cFiles.length) warnings.push('No .c files found.');
   if (!mains.length && callableFunctions.length) warnings.push('No main() detected. c_vis will generate a disposable runner for the selected function.');
-  if (!mains.length && !callableFunctions.length && cFiles.length) warnings.push('No runnable function definition detected.');
+  if (!mains.length && !callableFunctions.length && sourceFiles.length && staticDeclarations) warnings.push('No runnable function definition detected. Static source structure is available without execution.');
+  if (!mains.length && !callableFunctions.length && cFiles.length && !staticDeclarations) warnings.push('No runnable function or structural declaration detected.');
   if (mains.length > 1) warnings.push(`Multiple main() candidates detected (${mains.length}).`);
 
   return {
@@ -135,6 +201,11 @@ function analyze(files) {
     buildPlan: buildSystem ? { type: 'make' } : { type: 'cc', sources: cFiles.map((file) => file.path), includeDirs },
     profile,
     structs,
+    enums,
+    typedefs,
+    defines,
+    staticDeclarations,
+    visualizationMode: mains.length || callableFunctions.length ? 'runtime' : 'static',
     warnings,
     durationMs: Math.round(performance.now() - started)
   };
