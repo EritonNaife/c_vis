@@ -26,6 +26,8 @@ First  ←  Previous  ←  current state  →  Next  →  Last
 
 `Next` follows the next source-level execution state. `Previous` and `First` navigate states already observed. `Last` traces forward until program exit or the configured trace limit.
 
+Long traces are resumable. While `Last` is running, c_vis reports observed-state progress and exposes Cancel. A timeout, cancellation, or trace-limit stop keeps the partial history usable; use `Resume` or `Next` rather than restarting the whole session.
+
 ## v0.3 interface
 
 v0.3 combines the useful workspace density of v0.1 with the visual-execution model of v0.2:
@@ -53,6 +55,9 @@ For `push_swap`, it renders:
 - current function and local variables
 - selected strategy, disorder, and operation count
 - clickable nodes that reveal address and `next` pointer details
+- a preserved final stack/metric summary after process exit
+
+The adapter does not interpret `t_context` metrics until the context satisfies its initialized-state invariants, so early stack frames show those values as unavailable rather than presenting uninitialized memory as real data.
 
 ### Memory view
 
@@ -62,6 +67,7 @@ Progressive detail for when the C representation matters:
 - linked-node addresses
 - raw local values
 - call stack frames
+- preserved final linked-node state after process exit
 
 ### Secondary debugger controls
 
@@ -72,8 +78,8 @@ The header includes Restart, Step in, Step over, Finish, and Continue as optiona
 ### Project and output tools
 
 - Project explorer keeps the complete source tree available without making it the main interaction model.
-- Source files can be browsed independently; stepping returns focus to the executing source file.
-- The terminal button exposes program stdout and the captured push_swap operation stream.
+- Source files can be browsed independently; stepping returns focus to the executing source file and keeps the active line visible.
+- The terminal button exposes program stdout and the captured push_swap operation stream, including partial output during a paused trace.
 
 ## Architecture
 
@@ -119,6 +125,7 @@ The target project is mounted read-only. `c_vis` copies it into a disposable run
 - `CVIS_BUILD_COMMAND` — target debug build command
 - `CVIS_ADAPTER` — `push_swap` or `none`
 - `CVIS_TRACE_LIMIT` — maximum captured states when tracing to Last (default `1500`)
+- `CVIS_GDB_STOP_TIMEOUT_MS` — maximum wait for a single GDB execution command before c_vis interrupts and preserves a resumable partial trace (default `30000`)
 
 ## Current boundary
 
