@@ -9,13 +9,25 @@ function unwrapList(value, key) {
   return value.map((entry) => entry?.[key] ?? entry).filter(Boolean);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function executionTimeout(command, timeoutMs) {
+  const error = new Error(`Timed out waiting for the debugged program to stop after ${timeoutMs}ms`);
+  error.code = 'EXEC_TIMEOUT';
+  error.command = command;
+  return error;
+}
+
 export class GdbClient extends EventEmitter {
-  constructor({ cwd, executable, args = [], adapterScript = null }) {
+  constructor({ cwd, executable, args = [], adapterScript = null, stopTimeoutMs = 30000 }) {
     super();
     this.cwd = cwd;
     this.executable = executable;
     this.args = args;
     this.adapterScript = adapterScript;
+    this.stopTimeoutMs = stopTimeoutMs;
     this.proc = null;
     this.buffer = '';
     this.token = 1;
@@ -24,7 +36,10 @@ export class GdbClient extends EventEmitter {
     this.consoleLines = [];
     this.targetLines = [];
     this.lastStop = null;
-    this.exited = false;
+    this.lastPushSwap = null;
+    this.gdbExited = false;
+    this.inferiorExited = false;
+    this.running = false;
   }
 
   async start() {
@@ -37,7 +52,8 @@ export class GdbClient extends EventEmitter {
     this.proc.stdout.on('data', (chunk) => this.#onData(chunk));
     this.proc.stderr.on('data', (chunk) => this.emit('stderr', chunk));
     this.proc.on('exit', (code, signal) => {
-      this.exited = true;
+      this.gdbExited = true;
+      this.running = false;
       const error = new Error(`GDB exited (${code ?? signal ?? 'unknown'})`);
       for (const pending of this.pending.values()) pending.reject(error);
       this.pending.clear();
@@ -57,7 +73,7 @@ export class GdbClient extends EventEmitter {
   }
 
   command(command, timeoutMs = 10000) {
-    if (!this.proc || this.exited) return Promise.reject(new Error('GDB is not running'));
+    if (!this.proc || this.gdbExited) return Promise.reject(new Error('GDB is not running'));
     const token = this.token++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -72,12 +88,20 @@ export class GdbClient extends EventEmitter {
     });
   }
 
-  async exec(command) {
-    if (this.exited) return { reason: 'exited' };
-    const stopPromise = this.#waitForStop();
+  async exec(command, timeoutMs = this.stopTimeoutMs) {
+    if (this.inferiorExited) return { reason: 'exited' };
+    const stopPromise = this.#waitForStop(command, timeoutMs);
     const result = await this.command(command);
     if (!['running', 'done'].includes(result.class)) throw new Error(`Unexpected GDB result: ${result.class}`);
-    return stopPromise;
+    try {
+      return await stopPromise;
+    } catch (error) {
+      if (error.code === 'EXEC_TIMEOUT') {
+        await this.#recoverFromTimeout();
+        error.recovered = !this.running;
+      }
+      throw error;
+    }
   }
 
   async action(name) {
@@ -87,9 +111,28 @@ export class GdbClient extends EventEmitter {
     return this.snapshot();
   }
 
+  async interrupt() {
+    if (!this.proc || this.gdbExited || this.inferiorExited || !this.running) return;
+    try {
+      await this.command('-exec-interrupt', 3000);
+    } catch (error) {
+      if (this.running) throw error;
+    }
+  }
+
   async snapshot() {
-    if (this.exited || this.lastStop?.reason?.startsWith('exited')) {
-      return { status: 'exited', stop: this.lastStop, frame: null, frames: [], locals: [], targetOutput: this.targetLines.join(''), operations: this.#operations(), pushSwap: null };
+    if (this.inferiorExited) {
+      const pushSwap = this.adapterScript ? await this.#readPushSwapState() : null;
+      return {
+        status: 'exited',
+        stop: this.lastStop,
+        frame: null,
+        frames: [],
+        locals: [],
+        targetOutput: this.targetLines.join(''),
+        operations: this.#operations(),
+        pushSwap: pushSwap ?? this.lastPushSwap
+      };
     }
 
     const [frameRecord, stackRecord, localsRecord] = await Promise.all([
@@ -98,18 +141,7 @@ export class GdbClient extends EventEmitter {
       this.command('-stack-list-variables --simple-values')
     ]);
 
-    let pushSwap = null;
-    if (this.adapterScript) {
-      const startIndex = this.consoleLines.length;
-      try {
-        await this.command(`-interpreter-exec console ${miQuote('cvis-push-swap-state')}`);
-        const added = this.consoleLines.slice(startIndex);
-        const stateLine = [...added].reverse().find((line) => line.startsWith('CVIS_PUSH_SWAP_STATE '));
-        if (stateLine) pushSwap = JSON.parse(stateLine.slice('CVIS_PUSH_SWAP_STATE '.length));
-      } catch (error) {
-        pushSwap = { available: false, reason: error.message };
-      }
-    }
+    const pushSwap = this.adapterScript ? await this.#readPushSwapState() : null;
 
     return {
       status: 'paused',
@@ -126,28 +158,65 @@ export class GdbClient extends EventEmitter {
   async stop() {
     if (!this.proc) return;
     try {
-      if (!this.exited) await this.command('-gdb-exit', 2000);
+      if (!this.gdbExited) await this.command('-gdb-exit', 2000);
     } catch {
       this.proc.kill('SIGKILL');
     }
-    this.exited = true;
+    this.gdbExited = true;
+    this.running = false;
+  }
+
+  async #readPushSwapState() {
+    const startIndex = this.consoleLines.length;
+    try {
+      await this.command(`-interpreter-exec console ${miQuote('cvis-push-swap-state')}`);
+      const added = this.consoleLines.slice(startIndex);
+      const stateLine = [...added].reverse().find((line) => line.startsWith('CVIS_PUSH_SWAP_STATE '));
+      if (!stateLine) return this.lastPushSwap;
+      const state = JSON.parse(stateLine.slice('CVIS_PUSH_SWAP_STATE '.length));
+      if (state?.available && state.initialized !== false) this.lastPushSwap = state;
+      return state;
+    } catch (error) {
+      if (this.lastPushSwap) return this.lastPushSwap;
+      return { available: false, reason: error.message };
+    }
   }
 
   #operations() {
-    return this.targetLines.join('').split(/\r?\n/).map((line) => line.trim()).filter((line) => OPERATION_RE.test(line));
+    return this.targetLines
+      .join('')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => OPERATION_RE.test(line));
   }
 
-  #waitForStop(timeoutMs = 15000) {
+  #waitForStop(command, timeoutMs) {
     return new Promise((resolve, reject) => {
       const waiter = { resolve, reject };
       const timer = setTimeout(() => {
         const index = this.stopWaiters.indexOf(waiter);
         if (index >= 0) this.stopWaiters.splice(index, 1);
-        reject(new Error('Timed out waiting for the debugged program to stop'));
+        reject(executionTimeout(command, timeoutMs));
       }, timeoutMs);
       waiter.resolve = (record) => { clearTimeout(timer); resolve(record); };
       this.stopWaiters.push(waiter);
     });
+  }
+
+  async #recoverFromTimeout() {
+    if (this.gdbExited || this.inferiorExited || !this.running) return;
+    try {
+      await this.command('-exec-interrupt', 3000);
+    } catch {
+      if (!this.running) return;
+    }
+    const deadline = Date.now() + 5000;
+    while (this.running && Date.now() < deadline) await sleep(25);
+  }
+
+  #appendRawTargetLine(text) {
+    if (!text) return;
+    this.targetLines.push(text.endsWith('\n') ? text : `${text}\n`);
   }
 
   #onData(chunk) {
@@ -171,14 +240,26 @@ export class GdbClient extends EventEmitter {
       }
       return;
     }
+    if (record.type === '*' && record.class === 'running') {
+      this.running = true;
+      return;
+    }
     if (record.type === '*' && record.class === 'stopped') {
+      this.running = false;
       this.lastStop = { reason: record.results.reason ?? 'stopped', ...record.results };
-      if (String(record.results.reason ?? '').startsWith('exited')) this.exited = true;
+      if (String(record.results.reason ?? '').startsWith('exited')) this.inferiorExited = true;
       const waiter = this.stopWaiters.shift();
       if (waiter) waiter.resolve(this.lastStop);
       return;
     }
-    if (record.type === '@') this.targetLines.push(record.text);
+    if (record.type === '@') {
+      this.targetLines.push(record.text);
+      return;
+    }
+    if (record.type === 'raw') {
+      this.#appendRawTargetLine(record.text);
+      return;
+    }
     if (record.type === '~') this.consoleLines.push(record.text.replace(/\r?\n$/, ''));
   }
 }
