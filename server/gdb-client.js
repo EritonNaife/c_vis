@@ -27,6 +27,7 @@ export class GdbClient extends EventEmitter {
     adapterCommand = null,
     adapterStatePrefix = null,
     tracePolicy = null,
+    entryBreakpoint = 'main',
     stopTimeoutMs = 30000
   }) {
     super();
@@ -37,6 +38,7 @@ export class GdbClient extends EventEmitter {
     this.adapterCommand = adapterCommand;
     this.adapterStatePrefix = adapterStatePrefix;
     this.tracePolicy = tracePolicy || { skipFiles: [], skipFunctions: [] };
+    this.entryBreakpoint = entryBreakpoint || 'main';
     this.stopTimeoutMs = stopTimeoutMs;
     this.proc = null;
     this.buffer = '';
@@ -88,7 +90,7 @@ export class GdbClient extends EventEmitter {
       await this.command(`-interpreter-exec console ${miQuote(`skip function ${func}`)}`);
     }
 
-    await this.command('-break-insert main');
+    await this.command(`-break-insert ${miQuote(this.entryBreakpoint)}`);
     await this.exec('-exec-run');
     return this.snapshot();
   }
