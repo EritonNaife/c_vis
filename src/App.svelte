@@ -6,6 +6,7 @@
   import Timeline from './lib/Timeline.svelte';
   import OutputDrawer from './lib/OutputDrawer.svelte';
   import ProjectImport from './lib/ProjectImport.svelte';
+  import EntryPointPanel from './lib/EntryPointPanel.svelte';
   import ErrorBanner from './lib/ErrorBanner.svelte';
   import DiagnosticsDrawer from './lib/DiagnosticsDrawer.svelte';
   import { loadProject } from './lib/project-loader.js';
@@ -20,6 +21,7 @@
   let sourceMap = new Map();
   let config = $state(null);
   let project = $state(null);
+  let entry = $state(null);
   let build = $state(null);
   let traceVersion = $state(0);
   let currentIndex = $state(0);
@@ -56,13 +58,17 @@
       : project ? 'ready' : 'idle'
   );
   const projectFiles = $derived(project ? [...(project.analysis?.cFiles ?? []), ...(project.analysis?.headerFiles ?? [])].sort() : []);
+  const callableFunctions = $derived((project?.serverAnalysis?.functions ?? project?.analysis?.functions ?? []).filter((fn) => fn.name !== 'main'));
+  const hasMain = $derived(Boolean((project?.serverAnalysis?.mainCandidates ?? project?.analysis?.mainCandidates ?? []).length));
   const projectDiagnostics = $derived(project ? {
     workspaceId: project.workspaceId,
     fileCount: project.analysis?.fileCount,
     totalBytes: project.totalBytes,
     cFiles: project.analysis?.cFiles?.length ?? 0,
     headerFiles: project.analysis?.headerFiles?.length ?? 0,
+    functions: project.serverAnalysis?.functions?.length ?? project.analysis?.functions?.length ?? 0,
     mainCandidates: project.analysis?.mainCandidates ?? [],
+    entry: entry?.kind === 'function' ? `${entry.name} · ${entry.file}:${entry.line}` : entry?.kind ?? null,
     profile: project.serverAnalysis?.profile ?? project.analysis?.profile,
     buildSystem: project.serverAnalysis?.buildSystem?.type ?? project.analysis?.buildSystem?.type ?? 'cc',
     skipped: project.skipped?.length ?? 0
@@ -95,6 +101,41 @@
     if (quote) throw normalizeError(new Error('Unclosed quote in program arguments'), { code: 'INVALID_ARGUMENTS', stage: 'client' });
     if (current) values.push(current);
     return values;
+  }
+
+  function functionKey(fn) {
+    return `${fn.file}::${fn.name}::${fn.line}`;
+  }
+
+  function makeFunctionEntry(fn, existingArgs = []) {
+    return {
+      kind: 'function',
+      file: fn.file,
+      line: fn.line,
+      name: fn.name,
+      args: (fn.params ?? []).map((param, index) => existingArgs[index] ?? param.defaultExpression ?? '0')
+    };
+  }
+
+  function chooseInitialEntry(analysis) {
+    if (analysis?.mainCandidates?.length) return { kind: 'main' };
+    const functions = (analysis?.functions ?? []).filter((fn) => fn.name !== 'main');
+    return functions.length ? makeFunctionEntry(functions[0]) : null;
+  }
+
+  function selectFunction(key) {
+    const fn = callableFunctions.find((candidate) => functionKey(candidate) === key);
+    if (!fn) return;
+    entry = makeFunctionEntry(fn);
+    sourcePath = fn.file;
+    record('entry.selected', { kind: 'function', name: fn.name, file: fn.file, params: fn.params?.length ?? 0 });
+  }
+
+  function setFunctionArgument(index, value) {
+    if (entry?.kind !== 'function') return;
+    const args = [...(entry.args ?? [])];
+    args[index] = value;
+    entry = { ...entry, args };
   }
 
   function clearTrace() {
@@ -131,6 +172,7 @@
     clearTrace();
     error = null;
     project = null;
+    entry = null;
     sourceMap = new Map();
     phase = 'importing';
     phaseMessage = 'Reading and analyzing project in browser…';
@@ -139,7 +181,7 @@
     try {
       const loaded = await loadProject(entries, { maxBytes: config?.maxUploadBytes });
       sourceMap = new Map(loaded.files.map((file) => [file.path, file.content]));
-      const firstSource = loaded.analysis.mainCandidates?.[0] || loaded.analysis.cFiles?.[0] || loaded.analysis.headerFiles?.[0] || '';
+      const firstSource = loaded.analysis.mainCandidates?.[0] || loaded.analysis.functions?.[0]?.file || loaded.analysis.cFiles?.[0] || loaded.analysis.headerFiles?.[0] || '';
       sourcePath = firstSource;
       phase = 'uploading';
       phaseMessage = 'Creating isolated execution workspace…';
@@ -158,11 +200,23 @@
         totalBytes: loaded.totalBytes,
         skipped: [...new Set([...(loaded.skipped || []), ...(workspace.skipped || [])])]
       };
-      argsText = (workspace.analysis?.profile || loaded.analysis.profile) === 'push_swap' ? '4 67 3 87 23' : '';
+      entry = chooseInitialEntry(workspace.analysis || loaded.analysis);
+      if (entry?.kind === 'function') sourcePath = entry.file;
+      argsText = entry?.kind === 'main' && (workspace.analysis?.profile || loaded.analysis.profile) === 'push_swap' ? '4 67 3 87 23' : '';
       phase = 'ready';
       phaseMessage = '';
-      span.end({ files: loaded.files.length, profile: workspace.analysis?.profile || loaded.analysis.profile, analysisMs: loaded.analysis.durationMs });
-      record('project.ready', { files: loaded.files.length, profile: workspace.analysis?.profile || loaded.analysis.profile });
+      span.end({
+        files: loaded.files.length,
+        profile: workspace.analysis?.profile || loaded.analysis.profile,
+        analysisMs: loaded.analysis.durationMs,
+        entryKind: entry?.kind ?? 'none'
+      });
+      record('project.ready', {
+        files: loaded.files.length,
+        functions: workspace.analysis?.functions?.length ?? loaded.analysis.functions?.length ?? 0,
+        profile: workspace.analysis?.profile || loaded.analysis.profile,
+        entryKind: entry?.kind ?? 'none'
+      });
     } catch (cause) {
       const failure = normalizeError(cause, { stage: phase === 'uploading' ? 'workspace' : 'ingest' });
       error = failure;
@@ -188,7 +242,13 @@
     }
     if (event.type === 'build.completed') {
       build = event.build;
-      record('build.completed', { profile: event.analysis?.profile, cFiles: event.analysis?.cFiles, buildSystem: event.analysis?.buildSystem });
+      record('build.completed', {
+        profile: event.analysis?.profile,
+        cFiles: event.analysis?.cFiles,
+        buildSystem: event.analysis?.buildSystem,
+        entryKind: event.entry?.kind,
+        entryName: event.entry?.name
+      });
       return;
     }
     if (event.type === 'debugger.started') {
@@ -232,19 +292,24 @@
   }
 
   async function visualize() {
-    if (!project?.workspaceId || capturing) return;
+    if (!project?.workspaceId || capturing || !entry) return;
     stopRun();
     clearTrace();
     error = null;
     phase = 'building';
-    phaseMessage = 'Starting native execution…';
+    phaseMessage = entry.kind === 'function' ? `Generating runner for ${entry.name}()…` : 'Starting native execution…';
     runController = new AbortController();
-    const span = startSpan('run.capture', { profile: project.serverAnalysis?.profile || project.analysis?.profile });
+    const span = startSpan('run.capture', {
+      profile: project.serverAnalysis?.profile || project.analysis?.profile,
+      entryKind: entry.kind,
+      entryName: entry.name ?? 'main'
+    });
 
     try {
       await streamRun({
         workspaceId: project.workspaceId,
-        args: parseArgs(argsText),
+        args: entry.kind === 'main' ? parseArgs(argsText) : [],
+        entry,
         signal: runController.signal,
         onEvent: handleTraceEvent
       });
@@ -279,6 +344,7 @@
     stopRun();
     clearTrace();
     project = null;
+    entry = null;
     sourceMap = new Map();
     sourcePath = '';
     argsText = '';
@@ -317,8 +383,12 @@
 
     <div class="run-controls">
       {#if project}
-        <input bind:value={argsText} aria-label="Program arguments" placeholder="program arguments (optional)" disabled={capturing} />
-        <button class="primary rebuild-button" onclick={visualize} disabled={capturing}>Visualize</button>
+        {#if entry?.kind === 'main'}
+          <input bind:value={argsText} aria-label="Program arguments" placeholder="program arguments (optional)" disabled={capturing} />
+        {:else if entry?.kind === 'function'}
+          <span class="entry-chip"><strong>{entry.name}()</strong><span>generated runner</span></span>
+        {/if}
+        <button class="primary rebuild-button" onclick={visualize} disabled={capturing || !entry}>Visualize</button>
       {:else}
         <span class="topbar-hint">Open a C file or project folder</span>
       {/if}
@@ -337,6 +407,7 @@
             <span class="eyebrow">settings</span>
             <div class="setting-row"><span>Version</span><strong>{config?.version ?? '0.4'}</strong></div>
             <div class="setting-row"><span>Execution</span><strong>native GDB → browser replay</strong></div>
+            <div class="setting-row"><span>Entry</span><strong>{entry?.kind === 'function' ? `${entry.name}()` : entry?.kind ?? 'none'}</strong></div>
             <div class="setting-row"><span>Trace limit</span><strong>{config?.traceLimit ?? '—'}</strong></div>
             <div class="setting-row"><span>Profile</span><strong>{project?.serverAnalysis?.profile ?? project?.analysis?.profile ?? 'generic'}</strong></div>
             <div class="setting-row"><span>Build</span><strong>{project?.serverAnalysis?.buildSystem?.type ?? project?.analysis?.buildSystem?.type ?? 'cc'}</strong></div>
@@ -368,8 +439,12 @@
           {:else}
             <div class="visual-empty">
               <span class="eyebrow">project ready</span>
-              <h2>{project.analysis?.mainCandidates?.[0] ?? 'C project'}</h2>
-              <p>{project.analysis?.fileCount} files analyzed in the browser. Add program arguments if needed, then Visualize.</p>
+              {#if hasMain}
+                <h2>{project.analysis?.mainCandidates?.[0] ?? 'C program'}</h2>
+                <p>{project.analysis?.fileCount} files analyzed. c_vis found main() and can run the program directly.</p>
+              {:else}
+                <EntryPointPanel functions={callableFunctions} {entry} onSelect={selectFunction} onArgument={setFunctionArgument} />
+              {/if}
               {#if project.analysis?.warnings?.length}<div class="project-warnings">{project.analysis.warnings.join(' ')}</div>{/if}
             </div>
           {/if}
