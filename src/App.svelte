@@ -14,6 +14,7 @@
   let sourcePath = $state('');
   let mode = $state('program');
   let busy = $state(false);
+  let tracePolling = $state(false);
   let error = $state('');
   let showSettings = $state(false);
   let showTerminal = $state(false);
@@ -21,12 +22,15 @@
 
   const snapshot = $derived(session?.snapshot ?? null);
   const previousSnapshot = $derived(session?.previousSnapshot ?? null);
+  const trace = $derived(session?.trace ?? null);
+  const tracing = $derived(trace?.status === 'running');
   const executionPath = $derived(snapshot?.frame?.projectPath ?? '');
   const displayLine = $derived(sourcePath === executionPath ? snapshot?.frame?.line : null);
   const previousLine = $derived(previousSnapshot?.frame?.projectPath === sourcePath ? previousSnapshot?.frame?.line : null);
   const displayFunction = $derived(sourcePath === executionPath ? snapshot?.frame?.func : '');
-  const status = $derived(busy ? 'running' : snapshot?.status ?? 'ready');
-  const canDebug = $derived(Boolean(snapshot && snapshot.status !== 'exited' && !busy));
+  const status = $derived(tracing ? 'tracing' : busy ? 'running' : snapshot?.status ?? 'ready');
+  const interactionLocked = $derived(busy || tracing);
+  const canDebug = $derived(Boolean(snapshot && snapshot.status !== 'exited' && !interactionLocked));
 
   async function request(url, options) {
     const response = await fetch(url, options);
@@ -45,6 +49,10 @@
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload)
     });
+  }
+
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   function parseArgs(text) {
@@ -120,6 +128,22 @@
     }
   }
 
+  async function pollTrace() {
+    if (tracePolling) return;
+    tracePolling = true;
+    try {
+      while (session?.trace?.status === 'running') {
+        await delay(220);
+        const payload = await request('/api/session');
+        await syncSession(payload);
+      }
+    } catch (cause) {
+      error = cause.message;
+    } finally {
+      tracePolling = false;
+    }
+  }
+
   async function start() {
     await withBusy(async () => {
       await syncSession(await post('/api/session/start', { args: parseArgs(argsText) }));
@@ -136,6 +160,23 @@
     await withBusy(async () => {
       await syncSession(await post('/api/session/action', { action: name }));
     });
+  }
+
+  async function last() {
+    await withBusy(async () => {
+      await syncSession(await post('/api/session/action', { action: 'last' }));
+    });
+    if (session?.trace?.status === 'running') void pollTrace();
+  }
+
+  async function cancelTrace() {
+    try {
+      await syncSession(await post('/api/session/trace/cancel'));
+      if (session?.trace?.status === 'running') void pollTrace();
+    } catch (cause) {
+      error = cause.message;
+      if (cause.payload?.session) await syncSession(cause.payload.session);
+    }
   }
 
   async function debugAction(name) {
@@ -164,16 +205,16 @@
     </div>
 
     <div class="run-controls">
-      <input bind:value={argsText} aria-label="Program arguments" placeholder="program arguments" />
-      <button class="primary rebuild-button" onclick={start} disabled={busy}>Rebuild &amp; start</button>
+      <input bind:value={argsText} aria-label="Program arguments" placeholder="program arguments" disabled={tracing} />
+      <button class="primary rebuild-button" onclick={start} disabled={interactionLocked}>Rebuild &amp; start</button>
     </div>
 
     <div class="header-actions">
-      <div class="status-pill" class:running={busy}><span></span>{status}</div>
+      <div class="status-pill" class:running={busy || tracing}><span></span>{status}</div>
 
       {#if showPowerControls}
         <div class="power-controls" aria-label="Advanced debugger controls">
-          <button onclick={restart} disabled={!session || busy}>Restart</button>
+          <button onclick={restart} disabled={!session || interactionLocked}>Restart</button>
           <button onclick={() => debugAction('step')} disabled={!canDebug}>Step in</button>
           <button onclick={() => debugAction('next')} disabled={!canDebug}>Step over</button>
           <button onclick={() => debugAction('finish')} disabled={!canDebug}>Finish</button>
@@ -191,6 +232,7 @@
             <label class="setting-toggle"><input type="checkbox" bind:checked={showPowerControls} /><span>Show debugger controls</span></label>
             <div class="setting-row"><span>Execution</span><strong>source-level timeline</strong></div>
             <div class="setting-row"><span>Trace limit</span><strong>{session?.traceLimit ?? project?.traceLimit ?? '—'}</strong></div>
+            <div class="setting-row"><span>GDB stop timeout</span><strong>{project?.gdbStopTimeoutMs ? `${project.gdbStopTimeoutMs} ms` : '—'}</strong></div>
             <div class="setting-row"><span>Adapter</span><strong>{project?.adapter ?? 'generic C'}</strong></div>
           </aside>
         {/if}
@@ -233,12 +275,14 @@
     index={session?.index ?? 0}
     total={session?.total ?? 0}
     complete={session?.complete ?? false}
+    trace={session?.trace ?? null}
     active={Boolean(session)}
     {busy}
     onFirst={() => action('first')}
     onPrevious={() => action('previous')}
     onNext={() => action('next')}
-    onLast={() => action('last')}
+    onLast={last}
+    onCancel={cancelTrace}
     onNavigate={navigate}
   />
 </div>
