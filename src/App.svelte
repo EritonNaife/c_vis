@@ -190,9 +190,42 @@
       sourceMap = new Map(loaded.files.map((file) => [file.path, file.content]));
       const firstSource = loaded.analysis.mainCandidates?.[0] || loaded.analysis.functions?.[0]?.file || loaded.analysis.structs?.[0]?.file || loaded.analysis.headerFiles?.[0] || loaded.analysis.cFiles?.[0] || '';
       sourcePath = firstSource;
+
+      const browserEntry = chooseInitialEntry(loaded.analysis);
+      if (!browserEntry && loaded.analysis.visualizationMode === 'static') {
+        project = {
+          workspaceId: null,
+          analysis: loaded.analysis,
+          serverAnalysis: null,
+          totalBytes: loaded.totalBytes,
+          skipped: loaded.skipped || []
+        };
+        entry = null;
+        argsText = '';
+        phase = 'ready';
+        phaseMessage = '';
+        span.end({
+          files: loaded.files.length,
+          profile: loaded.analysis.profile,
+          analysisMs: loaded.analysis.durationMs,
+          entryKind: 'none',
+          mode: 'static',
+          backend: false
+        });
+        record('project.ready', {
+          files: loaded.files.length,
+          functions: loaded.analysis.functions?.length ?? 0,
+          staticDeclarations: loaded.analysis.staticDeclarations ?? 0,
+          profile: loaded.analysis.profile,
+          entryKind: 'none',
+          mode: 'static',
+          backend: false
+        });
+        return;
+      }
+
       phase = 'uploading';
       phaseMessage = 'Creating isolated execution workspace…';
-
       const uploadSpan = startSpan('project.upload', { files: loaded.files.length, bytes: loaded.totalBytes });
       const workspace = await postJson('/api/workspaces', {
         files: loaded.files.map(({ path, content }) => ({ path, content })),
@@ -218,7 +251,8 @@
         profile: workspace.analysis?.profile || loaded.analysis.profile,
         analysisMs: loaded.analysis.durationMs,
         entryKind: entry?.kind ?? 'none',
-        mode: resolvedMode
+        mode: resolvedMode,
+        backend: true
       });
       record('project.ready', {
         files: loaded.files.length,
@@ -226,7 +260,8 @@
         staticDeclarations: loaded.analysis.staticDeclarations ?? 0,
         profile: workspace.analysis?.profile || loaded.analysis.profile,
         entryKind: entry?.kind ?? 'none',
-        mode: resolvedMode
+        mode: resolvedMode,
+        backend: true
       });
     } catch (cause) {
       const failure = normalizeError(cause, { stage: phase === 'uploading' ? 'workspace' : 'ingest' });
