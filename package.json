@@ -1,15 +1,21 @@
 {
   "name": "c_vis",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Local C execution visualizer powered by GDB, with a push_swap adapter.",
+  "description": "Visual execution for C programs, powered by GDB.",
   "type": "module",
   "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js",
     "test": "node --test"
   },
+  "dependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.1.0",
+    "svelte": "^5.38.0",
+    "vite": "^7.1.0"
+  },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }
