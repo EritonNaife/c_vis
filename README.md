@@ -40,7 +40,7 @@ Uploaded source is never modified. c_vis asks only for semantic intent it cannot
 
 C source does not need executable behavior to be useful to c_vis.
 
-If no `main()` or runnable function body exists, c_vis automatically switches to a browser-only static source model. Static-only source stays local to the browser: no workspace upload, compile, executable, GDB session, or timeline is required.
+If no `main()` or runnable function body exists, c_vis automatically switches to a browser-only static source model. Static-only source stays local to the browser: there is no backend workspace step, compile, executable, GDB session, or timeline.
 
 The current static model visualizes:
 
