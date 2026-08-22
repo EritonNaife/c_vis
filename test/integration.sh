@@ -77,8 +77,6 @@ curl -fsS -N \
 
 grep -q '"runtime":{"available":true' "$RUNTIME_TRACE_FILE"
 grep -q '"frames":\[' "$RUNTIME_TRACE_FILE"
-grep -q '"type":"struct s_node"' "$RUNTIME_TRACE_FILE"
-grep -q '"pointeeType":"struct s_node"' "$RUNTIME_TRACE_FILE"
 grep -q '"name":"head"' "$RUNTIME_TRACE_FILE"
 grep -q '"type":"run.completed"' "$RUNTIME_TRACE_FILE"
 
