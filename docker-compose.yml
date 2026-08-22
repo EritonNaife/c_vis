@@ -3,16 +3,13 @@ services:
     build: .
     ports:
       - "4173:4173"
-    volumes:
-      - "${TARGET_PROJECT:-../push_swap}:/workspace/source:ro"
+    tmpfs:
+      - /workspace/projects
     environment:
-      CVIS_SOURCE_DIR: /workspace/source
-      CVIS_RUNTIME_DIR: /workspace/run
-      CVIS_EXECUTABLE: "${CVIS_EXECUTABLE:-./push_swap}"
-      CVIS_BUILD_COMMAND: '${CVIS_BUILD_COMMAND:-make re CFLAGS="-Wall -Wextra -Werror -g -O0"}'
-      CVIS_ADAPTER: "${CVIS_ADAPTER:-push_swap}"
+      CVIS_WORKSPACE_ROOT: /workspace/projects
       CVIS_TRACE_LIMIT: "${CVIS_TRACE_LIMIT:-5000}"
       CVIS_GDB_STOP_TIMEOUT_MS: "${CVIS_GDB_STOP_TIMEOUT_MS:-30000}"
+      CVIS_MAX_UPLOAD_BYTES: "${CVIS_MAX_UPLOAD_BYTES:-36700160}"
     cap_add:
       - SYS_PTRACE
     security_opt:
