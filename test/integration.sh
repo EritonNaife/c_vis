@@ -76,10 +76,10 @@ curl -fsS -N \
   > "$RUNTIME_TRACE_FILE"
 
 grep -q '"runtime":{"available":true' "$RUNTIME_TRACE_FILE"
+grep -q '"frames":\[' "$RUNTIME_TRACE_FILE"
 grep -q '"type":"struct s_node"' "$RUNTIME_TRACE_FILE"
 grep -q '"pointeeType":"struct s_node"' "$RUNTIME_TRACE_FILE"
 grep -q '"name":"head"' "$RUNTIME_TRACE_FILE"
-grep -q '"storage":"stack"' "$RUNTIME_TRACE_FILE"
 grep -q '"type":"run.completed"' "$RUNTIME_TRACE_FILE"
 
 frame_workspace_json=$(curl -fsS \
@@ -98,6 +98,7 @@ curl -fsS -N \
 grep -q '"function":"touch"' "$FRAME_TRACE_FILE"
 grep -q '"function":"main"' "$FRAME_TRACE_FILE"
 grep -q '"name":"greeting"' "$FRAME_TRACE_FILE"
+grep -q '"storage":"stack"' "$FRAME_TRACE_FILE"
 grep -q '"ownerFrame":"frame:1"' "$FRAME_TRACE_FILE"
 grep -q '"type":"run.completed"' "$FRAME_TRACE_FILE"
 
