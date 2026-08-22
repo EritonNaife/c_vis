@@ -270,25 +270,31 @@ export function memoryModel(runtime) {
   }] : [];
   const frames = runtime?.frames?.length ? runtime.frames : fallbackFrame;
   const locations = new Map();
+  const stackObjectLabels = new Map();
 
   for (const frame of frames) {
     for (const root of frame.roots ?? []) {
+      const label = `${frame.function}.${root.name}`;
       addLocation(locations, root.address, {
         kind: 'root',
         frameId: frame.id,
-        label: `${frame.function}.${root.name}`,
+        label,
         root
       });
+      const target = descriptorTarget(root.value);
+      const targetObject = target ? objectMap.get(target) : null;
+      if (targetObject?.storage === 'stack') stackObjectLabels.set(targetObject.id, label);
     }
   }
 
   for (const object of objects.filter((candidate) => candidate.storage === 'stack')) {
-    addLocation(locations, object.address, { kind: 'object', label: object.type, object });
+    const baseLabel = stackObjectLabels.get(object.id) ?? object.type;
+    addLocation(locations, object.address, { kind: 'object', label: baseLabel, object });
     for (const field of object.fields ?? []) {
-      addLocation(locations, field.address, { kind: 'field', label: `${object.type}.${field.name}`, object, field });
+      addLocation(locations, field.address, { kind: 'field', label: `${baseLabel}.${field.name}`, object, field });
     }
     for (const element of object.elements ?? []) {
-      addLocation(locations, element.address, { kind: 'element', label: `${object.type}[${element.index}]`, object, element });
+      addLocation(locations, element.address, { kind: 'element', label: `${baseLabel}[${element.index}]`, object, element });
     }
   }
 
