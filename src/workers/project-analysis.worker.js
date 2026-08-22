@@ -165,8 +165,8 @@ function extractDefines(files) {
   return defines.slice(0, 200);
 }
 
-function analyze(files) {
-  const started = performance.now();
+export function analyzeProjectFiles(files) {
+  const started = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const cFiles = files.filter((file) => extension(file.path) === '.c');
   const headerFiles = files.filter((file) => extension(file.path) === '.h');
   const sourceFiles = [...cFiles, ...headerFiles];
@@ -189,6 +189,7 @@ function analyze(files) {
   if (!mains.length && !callableFunctions.length && sourceFiles.length && staticDeclarations) warnings.push('No runnable function definition detected. Static source structure is available without execution.');
   if (!mains.length && !callableFunctions.length && cFiles.length && !staticDeclarations) warnings.push('No runnable function or structural declaration detected.');
   if (mains.length > 1) warnings.push(`Multiple main() candidates detected (${mains.length}).`);
+  const finished = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
   return {
     fileCount: files.length,
@@ -207,16 +208,18 @@ function analyze(files) {
     staticDeclarations,
     visualizationMode: mains.length || callableFunctions.length ? 'runtime' : 'static',
     warnings,
-    durationMs: Math.round(performance.now() - started)
+    durationMs: Math.round(finished - started)
   };
 }
 
-self.onmessage = (event) => {
-  const { id, type, files } = event.data || {};
-  if (type !== 'analyze') return;
-  try {
-    self.postMessage({ id, ok: true, analysis: analyze(files || []) });
-  } catch (error) {
-    self.postMessage({ id, ok: false, error: { message: error.message, stack: error.stack } });
-  }
-};
+if (typeof self !== 'undefined') {
+  self.onmessage = (event) => {
+    const { id, type, files } = event.data || {};
+    if (type !== 'analyze') return;
+    try {
+      self.postMessage({ id, ok: true, analysis: analyzeProjectFiles(files || []) });
+    } catch (error) {
+      self.postMessage({ id, ok: false, error: { message: error.message, stack: error.stack } });
+    }
+  };
+}
