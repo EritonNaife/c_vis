@@ -1,111 +1,62 @@
 # c_vis
 
-Visual execution for C programs.
+Browser-first C Visualizer powered by native GDB.
 
-`c_vis` runs the real compiled program under GDB, captures execution states, and renders those states as a visual explanation of what the C program is doing.
-
-The first domain adapter is built around `push_swap`.
-
-## Product model
-
-The debugger is infrastructure. The primary user experience is:
+## v0.4 product flow
 
 ```text
-C source
-   ↕
-execution history
-   ↕
-visual program state
+Open c_vis
+   ↓
+Drop/select a C file or project folder
+   ↓
+Browser analyzes the project
+   ↓
+c_vis creates an isolated build workspace
+   ↓
+Native compile + GDB execution
+   ↓
+Execution states stream to the browser
+   ↓
+First / Previous / Next / Last + timeline replay locally
 ```
 
-Primary navigation stays deliberately simple:
+The user does not configure GDB, debug flags, executable paths, Docker mounts, or adapter environment variables.
 
-```text
-First  ←  Previous  ←  current state  →  Next  →  Last
-```
+## Browser-owned work
 
-`Next` follows the next source-level execution state. `Previous` and `First` navigate states already observed. `Last` selects the final captured state; if preparation is still partial, it resumes tracing until program exit or the configured trace limit.
+- file/folder ingestion and source storage
+- project tree and source browsing
+- project analysis in a Web Worker
+- `main()` / Makefile / profile detection hints
+- execution trace history
+- timeline cursor and replay
+- stdout/operation reconstruction from streamed deltas
+- Program / Memory rendering
+- client telemetry and diagnostics
 
-`Rebuild & start` builds the target and begins materializing the whole execution history immediately. Once that preparation finishes, the timeline is a local replay: First, Previous, Next, Last, and the slider move through captured states without running the C program again. This is the same mental model as Python Tutor's Visualize flow.
+## Execution backend
 
-Long traces are resumable. While the history is being prepared, c_vis reports observed-state progress and exposes Cancel. A timeout, cancellation, or trace-limit stop keeps the partial history usable; use `Resume` or `Next` rather than restarting the whole session.
+- validates and materializes uploaded projects
+- infers/verifies supported build plans
+- builds with debug symbols
+- detects the produced executable
+- runs the native binary under GDB/MI
+- streams execution states as NDJSON
+- enforces debugger timeout and trace limits
+- emits structured logs, metrics and errors
 
-## v0.3 interface
+`push_swap` remains an enhanced profile. Its GDB script and trace-skip policy are outside the generic GDB client.
 
-v0.3 combines the useful workspace density of v0.1 with the visual-execution model of v0.2:
+## Supported v0.4 project shapes
 
-```text
-┌───────────────────────────────────────────────────────────────┐
-│ c_vis      arguments / rebuild       status / power controls │
-├──────────────┬───────────────────────┬────────────────────────┤
-│ Project      │ Executing C source    │ Program / Memory       │
-│ explorer     │                       │ visualization          │
-├──────────────┴───────────────────────┴────────────────────────┤
-│ First   Previous       execution timeline       Next   Last   │
-└───────────────────────────────────────────────────────────────┘
-```
+1. Single `.c` file.
+2. Simple multi-file C project.
+3. Makefile project.
+4. `push_swap` with its richer stack visualization.
 
-### Program view
+Binary project assets/dependencies are not uploaded in v0.4. Arbitrary package installation, full CMake/Meson/autotools support, hosted execution and generic heap reconstruction remain outside this version.
 
-The default view favors human-readable program state over debugger internals.
-
-For `push_swap`, it renders:
-
-- stack A and stack B as interactive visual stacks
-- node values and normalized indexes
-- changed/new nodes highlighted between execution states
-- current function and local variables
-- selected strategy, disorder, and operation count
-- clickable nodes that reveal address and `next` pointer details
-- a preserved final stack/metric summary after process exit
-
-The adapter does not interpret `t_context` metrics until the context satisfies its initialized-state invariants, so early stack frames show those values as unavailable rather than presenting uninitialized memory as real data.
-
-### Memory view
-
-Progressive detail for when the C representation matters:
-
-- pointer values
-- linked-node addresses
-- raw local values
-- call stack frames
-- preserved final linked-node state after process exit
-
-### Secondary debugger controls
-
-The header includes Restart, Step in, Step over, Finish, and Continue as optional power controls. They are intentionally secondary to the execution timeline and can be hidden from Settings.
-
-`Rebuild & start` recompiles the target. `Restart` restarts the existing debug build without recompiling.
-
-### Project and output tools
-
-- Project explorer keeps the complete source tree available without making it the main interaction model.
-- Source files can be browsed independently; stepping returns focus to the executing source file and keeps the active line visible.
-- The terminal button exposes program stdout and the captured push_swap operation stream, including partial output during a paused trace.
-
-## Architecture
-
-```text
-Svelte 5 + Vite
-      ↓ HTTP
-Node debugger service
-      ↓ GDB/MI2
-real compiled C process
-      ↓
-push_swap adapter (GDB Python)
-```
-
-## Run with push_swap
-
-Expected local layout:
-
-```text
-parent/
-├── c_vis/
-└── push_swap/
-```
-
-From `c_vis`:
+## Run
 
 ```sh
 docker compose up --build
@@ -117,18 +68,66 @@ Open:
 http://localhost:4173
 ```
 
-The target project is mounted read-only. `c_vis` copies it into a disposable runtime directory and builds the debug binary with `-g -O0`, so normal `push_swap` build artifacts are not modified.
+No sibling `push_swap` directory or `TARGET_PROJECT` mount is required. Uploaded workspaces live in disposable container tmpfs.
+
+## Execution protocol
+
+`POST /api/runs` returns an NDJSON stream:
+
+```text
+run.started
+build.started
+build.completed
+debugger.started
+snapshot
+snapshot
+...
+run.completed | trace.limit | run.cancelled | error
+```
+
+Snapshots do not repeat cumulative stdout/operation arrays. Each event sends only new stdout and operation data; the browser reconstructs cumulative state for replay.
+
+## Observability
+
+Server:
+
+- JSON logs with request/run/workspace correlation IDs
+- request/workspace/build/run/trace counters
+- stage durations
+- process memory/uptime
+- `GET /api/health`
+- `GET /api/diagnostics`
+
+Browser:
+
+- import/analyze/upload/run timings
+- bounded event/error buffer
+- global error and unhandled-rejection capture
+- trace counters
+- diagnostics drawer
+- error forwarding without source contents
+
+## Error contract
+
+Operational errors expose:
+
+```text
+code
+stage
+message
+retryable
+requestId
+runId
+details
+```
+
+Expected stages: `ingest`, `workspace`, `build`, `debugger`, `trace`, `client`, `server`.
 
 ## Configuration
 
-- `CVIS_SOURCE_DIR` — mounted source project
-- `CVIS_RUNTIME_DIR` — disposable debug workspace
-- `CVIS_EXECUTABLE` — compiled target executable
-- `CVIS_BUILD_COMMAND` — target debug build command
-- `CVIS_ADAPTER` — `push_swap` or `none`
-- `CVIS_TRACE_LIMIT` — maximum captured states in the eager execution history (default `5000`)
-- `CVIS_GDB_STOP_TIMEOUT_MS` — maximum wait for a single GDB execution command before c_vis interrupts and preserves a resumable partial trace (default `30000`)
+- `CVIS_WORKSPACE_ROOT` — disposable uploaded-project root (default `/workspace/projects`)
+- `CVIS_TRACE_LIMIT` — maximum streamed execution states (default `5000`)
+- `CVIS_GDB_STOP_TIMEOUT_MS` — maximum wait for one GDB execution stop (default `30000`)
+- `CVIS_MAX_UPLOAD_BYTES` — maximum JSON upload request size
 
-## Current boundary
-
-v0.3 focuses on understanding real execution. It does not yet include arbitrary breakpoint management, watch expressions, source editing, generic heap graph reconstruction, an LLDB backend, or cloud execution.
+The detailed implementation plan is in `docs/v0.4-plan.md`.
