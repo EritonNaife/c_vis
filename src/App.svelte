@@ -3,6 +3,7 @@
   import CodePane from './lib/CodePane.svelte';
   import ProgramState from './lib/ProgramState.svelte';
   import MemoryView from './lib/MemoryView.svelte';
+  import StaticProgramView from './lib/StaticProgramView.svelte';
   import Timeline from './lib/Timeline.svelte';
   import OutputDrawer from './lib/OutputDrawer.svelte';
   import ProjectImport from './lib/ProjectImport.svelte';
@@ -49,12 +50,14 @@
   const previousLine = $derived(previousSnapshot?.frame?.projectPath === sourcePath ? previousSnapshot?.frame?.line : null);
   const displayFunction = $derived(sourcePath === executionPath ? snapshot?.frame?.func : '');
   const capturing = $derived(phase === 'building' || phase === 'capturing');
+  const staticMode = $derived(Boolean(project && !entry));
   const status = $derived(
     phase === 'importing' ? 'analyzing'
       : phase === 'uploading' ? 'preparing'
       : phase === 'building' ? 'building'
       : phase === 'capturing' ? 'capturing'
       : phase === 'error' ? 'error'
+      : staticMode ? 'static'
       : project ? 'ready' : 'idle'
   );
   const projectFiles = $derived(project ? [...(project.analysis?.cFiles ?? []), ...(project.analysis?.headerFiles ?? [])].sort() : []);
@@ -62,18 +65,20 @@
   const hasMain = $derived(Boolean((project?.serverAnalysis?.mainCandidates ?? project?.analysis?.mainCandidates ?? []).length));
   const projectDiagnostics = $derived(project ? {
     workspaceId: project.workspaceId,
+    mode: staticMode ? 'static' : 'runtime',
     fileCount: project.analysis?.fileCount,
     totalBytes: project.totalBytes,
     cFiles: project.analysis?.cFiles?.length ?? 0,
     headerFiles: project.analysis?.headerFiles?.length ?? 0,
     functions: project.serverAnalysis?.functions?.length ?? project.analysis?.functions?.length ?? 0,
+    staticDeclarations: project.analysis?.staticDeclarations ?? 0,
     mainCandidates: project.analysis?.mainCandidates ?? [],
-    entry: entry?.kind === 'function' ? `${entry.name} · ${entry.file}:${entry.line}` : entry?.kind ?? null,
+    entry: staticMode ? 'static source model' : entry?.kind === 'function' ? `${entry.name} · ${entry.file}:${entry.line}` : entry?.kind ?? null,
     profile: project.serverAnalysis?.profile ?? project.analysis?.profile,
-    buildSystem: project.serverAnalysis?.buildSystem?.type ?? project.analysis?.buildSystem?.type ?? 'cc',
+    buildSystem: staticMode ? 'not required' : project.serverAnalysis?.buildSystem?.type ?? project.analysis?.buildSystem?.type ?? 'cc',
     skipped: project.skipped?.length ?? 0
   } : null);
-  const traceDiagnostics = $derived.by(() => { traceVersion; return traceStore.summary(); });
+  const traceDiagnostics = $derived.by(() => { traceVersion; return staticMode ? { mode: 'static', states: 0 } : traceStore.summary(); });
 
   function parseArgs(text) {
     const values = [];
@@ -174,6 +179,8 @@
     project = null;
     entry = null;
     sourceMap = new Map();
+    mode = 'program';
+    showTerminal = false;
     phase = 'importing';
     phaseMessage = 'Reading and analyzing project in browser…';
     const span = startSpan('project.import', { entries: entries.length });
@@ -181,7 +188,7 @@
     try {
       const loaded = await loadProject(entries, { maxBytes: config?.maxUploadBytes });
       sourceMap = new Map(loaded.files.map((file) => [file.path, file.content]));
-      const firstSource = loaded.analysis.mainCandidates?.[0] || loaded.analysis.functions?.[0]?.file || loaded.analysis.cFiles?.[0] || loaded.analysis.headerFiles?.[0] || '';
+      const firstSource = loaded.analysis.mainCandidates?.[0] || loaded.analysis.functions?.[0]?.file || loaded.analysis.structs?.[0]?.file || loaded.analysis.headerFiles?.[0] || loaded.analysis.cFiles?.[0] || '';
       sourcePath = firstSource;
       phase = 'uploading';
       phaseMessage = 'Creating isolated execution workspace…';
@@ -205,17 +212,21 @@
       argsText = entry?.kind === 'main' && (workspace.analysis?.profile || loaded.analysis.profile) === 'push_swap' ? '4 67 3 87 23' : '';
       phase = 'ready';
       phaseMessage = '';
+      const resolvedMode = entry ? 'runtime' : 'static';
       span.end({
         files: loaded.files.length,
         profile: workspace.analysis?.profile || loaded.analysis.profile,
         analysisMs: loaded.analysis.durationMs,
-        entryKind: entry?.kind ?? 'none'
+        entryKind: entry?.kind ?? 'none',
+        mode: resolvedMode
       });
       record('project.ready', {
         files: loaded.files.length,
         functions: workspace.analysis?.functions?.length ?? loaded.analysis.functions?.length ?? 0,
+        staticDeclarations: loaded.analysis.staticDeclarations ?? 0,
         profile: workspace.analysis?.profile || loaded.analysis.profile,
-        entryKind: entry?.kind ?? 'none'
+        entryKind: entry?.kind ?? 'none',
+        mode: resolvedMode
       });
     } catch (cause) {
       const failure = normalizeError(cause, { stage: phase === 'uploading' ? 'workspace' : 'ingest' });
@@ -347,8 +358,10 @@
     entry = null;
     sourceMap = new Map();
     sourcePath = '';
+    mode = 'program';
     argsText = '';
     error = null;
+    showTerminal = false;
     phase = 'idle';
     phaseMessage = '';
   }
@@ -383,12 +396,16 @@
 
     <div class="run-controls">
       {#if project}
-        {#if entry?.kind === 'main'}
-          <input bind:value={argsText} aria-label="Program arguments" placeholder="program arguments (optional)" disabled={capturing} />
-        {:else if entry?.kind === 'function'}
-          <span class="entry-chip"><strong>{entry.name}()</strong><span>generated runner</span></span>
+        {#if staticMode}
+          <span class="entry-chip static-entry-chip"><strong>Static structure</strong><span>browser visualization</span></span>
+        {:else}
+          {#if entry?.kind === 'main'}
+            <input bind:value={argsText} aria-label="Program arguments" placeholder="program arguments (optional)" disabled={capturing} />
+          {:else if entry?.kind === 'function'}
+            <span class="entry-chip"><strong>{entry.name}()</strong><span>generated runner</span></span>
+          {/if}
+          <button class="primary rebuild-button" onclick={visualize} disabled={capturing || !entry}>Visualize</button>
         {/if}
-        <button class="primary rebuild-button" onclick={visualize} disabled={capturing || !entry}>Visualize</button>
       {:else}
         <span class="topbar-hint">Open a C file or project folder</span>
       {/if}
@@ -399,18 +416,19 @@
       <div class="utility-cluster">
         {#if project}<button class="icon-button" onclick={resetProject} aria-label="Open another project" title="Open another project">＋</button>{/if}
         <button class:active={showSettings} class="icon-button" onclick={() => showSettings = !showSettings} aria-label="Settings" title="Settings">⚙</button>
-        <button class:active={showTerminal} class="icon-button terminal-icon" onclick={() => showTerminal = !showTerminal} aria-label="Program output" title="Program output" disabled={!snapshot}>&gt;_</button>
+        <button class:active={showTerminal} class="icon-button terminal-icon" onclick={() => showTerminal = !showTerminal} aria-label="Program output" title={staticMode ? 'No runtime output in static visualization' : 'Program output'} disabled={!snapshot || staticMode}>&gt;_</button>
         <button class:active={showDiagnostics} class="icon-button" onclick={openDiagnostics} aria-label="Diagnostics" title="Diagnostics">◎</button>
 
         {#if showSettings}
           <aside class="settings-popover">
             <span class="eyebrow">settings</span>
             <div class="setting-row"><span>Version</span><strong>{config?.version ?? '0.4'}</strong></div>
-            <div class="setting-row"><span>Execution</span><strong>native GDB → browser replay</strong></div>
-            <div class="setting-row"><span>Entry</span><strong>{entry?.kind === 'function' ? `${entry.name}()` : entry?.kind ?? 'none'}</strong></div>
-            <div class="setting-row"><span>Trace limit</span><strong>{config?.traceLimit ?? '—'}</strong></div>
+            <div class="setting-row"><span>Mode</span><strong>{staticMode ? 'static source model' : 'runtime execution'}</strong></div>
+            <div class="setting-row"><span>Execution</span><strong>{staticMode ? 'browser analysis only' : 'native GDB → browser replay'}</strong></div>
+            <div class="setting-row"><span>Entry</span><strong>{staticMode ? 'not required' : entry?.kind === 'function' ? `${entry.name}()` : entry?.kind ?? 'none'}</strong></div>
+            <div class="setting-row"><span>Trace limit</span><strong>{staticMode ? 'not applicable' : config?.traceLimit ?? '—'}</strong></div>
             <div class="setting-row"><span>Profile</span><strong>{project?.serverAnalysis?.profile ?? project?.analysis?.profile ?? 'generic'}</strong></div>
-            <div class="setting-row"><span>Build</span><strong>{project?.serverAnalysis?.buildSystem?.type ?? project?.analysis?.buildSystem?.type ?? 'cc'}</strong></div>
+            <div class="setting-row"><span>Build</span><strong>{staticMode ? 'not required' : project?.serverAnalysis?.buildSystem?.type ?? project?.analysis?.buildSystem?.type ?? 'cc'}</strong></div>
           </aside>
         {/if}
       </div>
@@ -420,21 +438,23 @@
   <ErrorBanner {error} onDismiss={() => error = null} />
 
   {#if project}
-    <main class="workspace">
+    <main class="workspace" class:static-workspace={staticMode}>
       <ProjectTree files={projectFiles} activeFile={sourcePath} onSelect={(path) => sourcePath = path} />
       <CodePane file={sourcePath} {source} line={displayLine} {previousLine} functionName={displayFunction} />
 
       <aside class="visual-pane">
         <header class="visual-header">
           <div class="view-switcher" role="tablist" aria-label="Visualization depth">
-            <button class:active={mode === 'program'} onclick={() => mode = 'program'}>Program</button>
-            <button class:active={mode === 'memory'} onclick={() => mode = 'memory'}>Memory</button>
+            <button class:active={mode === 'program'} onclick={() => mode = 'program'}>{staticMode ? 'Structure' : 'Program'}</button>
+            <button class:active={mode === 'memory'} onclick={() => !staticMode && (mode = 'memory')} disabled={staticMode} title={staticMode ? 'Runtime memory requires executable behavior' : 'Memory'}>Memory</button>
           </div>
           {#if phaseMessage}<span class="phase-message">{phaseMessage}</span>{/if}
         </header>
 
         <div class="visual-scroll">
-          {#if snapshot}
+          {#if staticMode}
+            <StaticProgramView analysis={project.analysis} onSelectSource={(path) => sourcePath = path} />
+          {:else if snapshot}
             {#if mode === 'program'}<ProgramState {snapshot} {previousSnapshot} />{:else}<MemoryView {snapshot} />{/if}
           {:else}
             <div class="visual-empty">
@@ -455,21 +475,29 @@
     <ProjectImport busy={phase === 'importing' || phase === 'uploading'} status={phaseMessage} onEntries={importEntries} />
   {/if}
 
-  {#if showTerminal}<OutputDrawer {snapshot} onClose={() => showTerminal = false} />{/if}
+  {#if showTerminal && !staticMode}<OutputDrawer {snapshot} onClose={() => showTerminal = false} />{/if}
   {#if showDiagnostics}<DiagnosticsDrawer client={clientDiagnostics} server={serverDiagnostics} project={projectDiagnostics} trace={traceDiagnostics} onRefresh={refreshDiagnostics} onClose={() => showDiagnostics = false} />{/if}
 
-  <Timeline
-    index={currentIndex}
-    {total}
-    complete={traceState.status === 'complete'}
-    {capturing}
-    trace={traceState}
-    active={total > 0}
-    onFirst={() => navigate(0)}
-    onPrevious={() => navigate(currentIndex - 1)}
-    onNext={() => navigate(currentIndex + 1)}
-    onLast={() => navigate(total - 1)}
-    onCancel={cancelCapture}
-    onNavigate={navigate}
-  />
+  {#if staticMode}
+    <footer class="static-mode-footer">
+      <span>Static source model</span>
+      <strong>No runtime trace required</strong>
+      <small>{project.analysis?.staticDeclarations ?? 0} declarations mapped in browser</small>
+    </footer>
+  {:else}
+    <Timeline
+      index={currentIndex}
+      {total}
+      complete={traceState.status === 'complete'}
+      {capturing}
+      trace={traceState}
+      active={total > 0}
+      onFirst={() => navigate(0)}
+      onPrevious={() => navigate(currentIndex - 1)}
+      onNext={() => navigate(currentIndex + 1)}
+      onLast={() => navigate(total - 1)}
+      onCancel={cancelCapture}
+      onNavigate={navigate}
+    />
+  {/if}
 </div>
