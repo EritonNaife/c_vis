@@ -1,12 +1,17 @@
 <script>
-  import { flip } from 'svelte/animate';
-  import { fade, fly } from 'svelte/transition';
+  import { fade } from 'svelte/transition';
+  import ArrayStructure from './ArrayStructure.svelte';
+  import LinearStructure from './LinearStructure.svelte';
+  import ObjectGraphStructure from './ObjectGraphStructure.svelte';
+  import TreeStructure from './TreeStructure.svelte';
   import {
     changedPointerKeys,
     diffRuntimeGraphs,
     linkedListModel,
     objectGraph,
     presentationRoots,
+    queueModel,
+    stackModel,
     treeModel,
     valueText
   } from './runtime-graph.js';
@@ -18,38 +23,28 @@
   const created = $derived(new Set(diff.created));
   const changed = $derived(new Set(diff.changed));
   const pointerChanges = $derived(changedPointerKeys(diff));
-
-  function isChanged(id) {
-    return changed.has(id);
-  }
-
-  function isCreated(id) {
-    return created.has(id);
-  }
+  const scalarPresentations = $derived(presentations.filter((item) => ['scalar', 'scalar-reference'].includes(item.kind)));
+  const pointerPresentations = $derived(presentations.filter((item) => item.kind === 'pointer'));
+  const visualPresentations = $derived(presentations.filter((item) => !['scalar', 'scalar-reference', 'pointer'].includes(item.kind)));
 
   function pointerChanged(objectId, field) {
     return pointerChanges.has(`${objectId}.${field}`);
   }
 
-  function visibleFields(fields = []) {
-    return fields.slice(0, 8);
+  function rootPointerChanged(name) {
+    return pointerChanges.has(`root:${name}`);
   }
 
-  function treeLevels(model) {
-    const levels = new Map();
-    for (const node of model.nodes ?? []) {
-      if (!levels.has(node.depth)) levels.set(node.depth, []);
-      levels.get(node.depth).push(node);
-    }
-    return [...levels.entries()].sort(([a], [b]) => a - b).map(([depth, nodes]) => ({ depth, nodes }));
+  function visibleFields(fields = []) {
+    return fields.slice(0, 10);
   }
 </script>
 
 <section class="runtime-visualizer" aria-label="Runtime C visualization">
   <header class="runtime-visualizer-header">
     <div>
-      <span class="eyebrow">semantic runtime</span>
-      <h3>Live program model</h3>
+      <span class="eyebrow">program</span>
+      <h3>What the data looks like</h3>
     </div>
     <div class="runtime-change-summary" aria-label="Changes in this step">
       {#if diff.total === 0}
@@ -65,143 +60,109 @@
 
   {#if diff.scalarChanges.length || diff.pointerChanges.length}
     <div class="runtime-transition-strip" transition:fade={{ duration: 120 }}>
-      {#each diff.scalarChanges.slice(0, 4) as change}
+      {#each diff.scalarChanges.slice(0, 5) as change}
         <span><strong>{change.name}</strong> {change.from ?? '—'} → {change.to ?? '—'}</span>
       {/each}
-      {#each diff.pointerChanges.slice(0, 4) as change}
-        <span><strong>{change.key}</strong> {change.from ?? 'NULL'} → {change.to ?? 'NULL'}</span>
+      {#each diff.pointerChanges.slice(0, 5) as change}
+        <span><strong>{change.key.replace('root:', '')}</strong> moved</span>
       {/each}
     </div>
   {/if}
 
-  <div class="runtime-root-list">
-    {#each presentations as presentation (presentation.root.name)}
-      <article class="runtime-root-card">
-        <header class="runtime-root-heading">
-          <div>
-            <span class="runtime-root-role">{presentation.root.role}</span>
-            <strong>{presentation.root.name}</strong>
-            <code>{presentation.root.type}</code>
-          </div>
-          <span class="runtime-kind-badge">{presentation.kind}</span>
-        </header>
-
-        {#if presentation.kind === 'scalar'}
-          <div class="runtime-scalar" class:changed={diff.scalarChanges.some((change) => change.name === presentation.root.name)}>
-            <span>{valueText(presentation.root.value)}</span>
-          </div>
-        {:else if presentation.kind === 'string'}
-          <div class="runtime-string">
-            <span class="quote">“</span><code>{presentation.root.value.string}</code><span class="quote">”</span>
-            <small>{presentation.root.value.target}</small>
-          </div>
-        {:else if presentation.kind === 'pointer'}
-          <div class="runtime-pointer" class:changed={pointerChanges.has(`root:${presentation.root.name}`)}>
-            <span>{presentation.root.name}</span><b>→</b><code>{presentation.root.value.null ? 'NULL' : presentation.root.value.target}</code>
-          </div>
-        {:else if presentation.kind === 'array'}
-          <div class="runtime-array" class:changed={isChanged(presentation.object.id)}>
-            {#each presentation.object.elements ?? [] as element (element.index)}
-              <div class="runtime-array-cell">
-                <small>[{element.index}]</small>
-                <strong>{valueText(element.value)}</strong>
-              </div>
-            {/each}
-            {#if presentation.object.length > (presentation.object.elements?.length ?? 0)}
-              <div class="runtime-array-cell more">+{presentation.object.length - presentation.object.elements.length}</div>
-            {/if}
-          </div>
-        {:else if presentation.kind === 'linked-list'}
-          {@const model = linkedListModel(runtime, presentation)}
-          <div class="runtime-chain" aria-label={`${presentation.root.name} linked list`}>
-            {#each model.nodes as node, index (node.id)}
-              <div class="runtime-chain-item" animate:flip={{ duration: 180 }} transition:fly={{ y: -8, duration: 140 }}>
-                <div class="runtime-object-card" class:created={isCreated(node.id)} class:changed={isChanged(node.id)}>
-                  <div class="runtime-object-address"><code>{node.address}</code></div>
-                  {#each visibleFields(node.fields) as field}
-                    <div class="runtime-field">
-                      <span>{field.name}</span>
-                      <strong>{valueText(field.value)}</strong>
-                    </div>
-                  {/each}
-                </div>
-                {#if index < model.nodes.length - 1 || node.link?.target}
-                  <div class:changed={pointerChanged(node.id, model.linkField)} class="runtime-edge">
-                    <small>{model.linkField}</small><b>→</b>
-                  </div>
-                {:else}
-                  <div class:changed={pointerChanged(node.id, model.linkField)} class="runtime-edge terminal">
-                    <small>{model.linkField}</small><b>→ NULL</b>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-            {#if model.cyclic}<span class="runtime-cycle">↺ cycle</span>{/if}
-            {#if model.truncated}<span class="runtime-cycle">… truncated</span>{/if}
-          </div>
-        {:else if presentation.kind === 'tree'}
-          {@const model = treeModel(runtime, presentation)}
-          <div class="runtime-tree" aria-label={`${presentation.root.name} tree`}>
-            {#each treeLevels(model) as level (level.depth)}
-              <div class="runtime-tree-level">
-                {#each level.nodes as node (node.id)}
-                  <div class="runtime-tree-node" class:created={isCreated(node.id)} class:changed={isChanged(node.id)}>
-                    <code>{node.address}</code>
-                    {#each visibleFields((node.fields ?? []).filter((field) => !model.childFields.includes(field.name))) as field}
-                      <div><span>{field.name}</span><strong>{valueText(field.value)}</strong></div>
-                    {/each}
-                    <small>{model.childFields.join(' · ')}</small>
-                  </div>
-                {/each}
-              </div>
-            {/each}
-            <div class="runtime-tree-edges">
-              {#each model.edges as edge}
-                <span class:changed={pointerChanged(edge.from, edge.field)}><code>{edge.from}</code>.{edge.field} → <code>{edge.to}</code></span>
-              {/each}
-            </div>
-          </div>
-        {:else if presentation.kind === 'struct' || presentation.kind === 'scalar-reference'}
-          <div class="runtime-struct" class:created={isCreated(presentation.object.id)} class:changed={isChanged(presentation.object.id)}>
-            <header><span>{presentation.object.kind}</span><code>{presentation.object.address}</code></header>
+  <div class="semantic-stage-list">
+    {#each visualPresentations as presentation (presentation.root.name)}
+      {#if presentation.kind === 'array' || presentation.kind === 'string-array'}
+        <ArrayStructure
+          name={presentation.root.name}
+          object={presentation.object}
+          text={presentation.kind === 'string-array' ? presentation.text : null}
+          changed={changed.has(presentation.object.id)}
+        />
+      {:else if presentation.kind === 'string'}
+        <section class="ds-stage ds-string">
+          <header class="ds-stage-header">
+            <div><span class="ds-type">String</span><strong>{presentation.root.name}</strong></div>
+            <small>{presentation.root.type}</small>
+          </header>
+          <div class="string-hero">“{presentation.root.value.string}”</div>
+        </section>
+      {:else if ['linked-list', 'stack', 'queue'].includes(presentation.kind)}
+        {@const model = presentation.kind === 'stack'
+          ? stackModel(runtime, presentation)
+          : presentation.kind === 'queue'
+            ? queueModel(runtime, presentation)
+            : linkedListModel(runtime, presentation)}
+        <LinearStructure
+          kind={presentation.kind}
+          name={presentation.root.name}
+          {model}
+          changedIds={changed}
+          createdIds={created}
+          {pointerChanged}
+        />
+      {:else if presentation.kind === 'tree'}
+        {@const model = treeModel(runtime, presentation)}
+        <TreeStructure name={presentation.root.name} {model} changedIds={changed} createdIds={created} />
+      {:else if presentation.kind === 'graph' || presentation.kind === 'object'}
+        {@const graph = objectGraph(runtime, presentation.root)}
+        <ObjectGraphStructure name={presentation.root.name} {graph} changedIds={changed} createdIds={created} />
+      {:else if presentation.kind === 'struct'}
+        <section class="ds-stage ds-struct">
+          <header class="ds-stage-header">
+            <div><span class="ds-type">{presentation.object.kind}</span><strong>{presentation.root.name}</strong></div>
+            <small>{presentation.object.type}</small>
+          </header>
+          <div class="struct-card" class:changed={changed.has(presentation.object.id)}>
             {#each visibleFields(presentation.object.fields ?? []) as field}
-              <div class:changed={pointerChanged(presentation.object.id, field.name)} class="runtime-field">
+              <div class="struct-field" class:changed={pointerChanged(presentation.object.id, field.name)}>
                 <span>{field.name}</span>
-                <code>{field.type}</code>
+                <small>{field.type}</small>
                 <strong>{valueText(field.value)}</strong>
               </div>
             {/each}
-            {#if presentation.object.kind === 'scalar'}<strong>{presentation.object.value}</strong>{/if}
           </div>
-        {:else}
-          {@const graph = objectGraph(runtime, presentation.root)}
-          <div class="runtime-object-graph">
-            <div class="runtime-object-grid">
-              {#each graph.objects as object (object.id)}
-                <div class="runtime-object-card" class:created={isCreated(object.id)} class:changed={isChanged(object.id)}>
-                  <div class="runtime-object-address"><code>{object.address}</code><small>{object.type}</small></div>
-                  {#each visibleFields(object.fields ?? []) as field}
-                    <div class:changed={pointerChanged(object.id, field.name)} class="runtime-field">
-                      <span>{field.name}</span><strong>{valueText(field.value)}</strong>
-                    </div>
-                  {/each}
-                </div>
-              {/each}
-            </div>
-            {#if graph.edges.length}
-              <div class="runtime-graph-edges">
-                {#each graph.edges as edge}
-                  <span class:changed={pointerChanged(edge.from, edge.field)}><code>{edge.from}</code>.{edge.field} → <code>{edge.to}</code></span>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
-      </article>
+        </section>
+      {/if}
     {/each}
+
+    {#if scalarPresentations.length}
+      <section class="ds-stage ds-values">
+        <header class="ds-stage-header">
+          <div><span class="ds-type">Values</span><strong>Current scope</strong></div>
+          <small>{scalarPresentations.length} values</small>
+        </header>
+        <div class="value-grid">
+          {#each scalarPresentations as presentation (presentation.root.name)}
+            <div class="value-tile" class:changed={diff.scalarChanges.some((change) => change.name === presentation.root.name)}>
+              <span>{presentation.root.name}</span>
+              <small>{presentation.root.type}</small>
+              <strong>{presentation.kind === 'scalar-reference' ? presentation.object?.value ?? '—' : valueText(presentation.root.value)}</strong>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    {#if pointerPresentations.length}
+      <section class="ds-stage ds-pointers">
+        <header class="ds-stage-header">
+          <div><span class="ds-type">Pointers</span><strong>References</strong></div>
+          <small>{pointerPresentations.length}</small>
+        </header>
+        <div class="pointer-grid">
+          {#each pointerPresentations as presentation (presentation.root.name)}
+            <div class="pointer-tile" class:changed={rootPointerChanged(presentation.root.name)}>
+              <span>{presentation.root.name}</span>
+              <b>→</b>
+              <strong>{presentation.root.value.null ? 'NULL' : presentation.root.value.target ?? 'unresolved'}</strong>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
   </div>
 
   {#if runtime?.truncated}
-    <div class="runtime-limit-note">Visualization was safely bounded by the runtime inspection limits. The program continues normally.</div>
+    <div class="runtime-limit-note">The visual model was safely bounded. Execution itself is unaffected.</div>
   {/if}
 </section>
