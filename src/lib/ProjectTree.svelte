@@ -1,6 +1,7 @@
 <script>
   let { files = [], activeFile = '', onSelect } = $props();
   let openFolders = $state(new Set());
+  let collapsed = $state(false);
 
   const grouped = $derived.by(() => {
     const rootFiles = [];
@@ -45,32 +46,46 @@
   }
 </script>
 
-<nav class="project-tree" aria-label="Project files">
-  <div class="project-heading">Project</div>
-  <div class="project-scroll">
-    {#each grouped.rootFiles as file (file.path)}
-      <button class:active={activeFile === file.path} class="tree-file root-file" onclick={() => onSelect?.(file.path)}>
-        <span class="file-mark">C</span><span>{file.name}</span>
-      </button>
-    {/each}
-
-    {#each grouped.folders as folder (folder.path)}
-      <section class="tree-group">
-        <button class="tree-folder" onclick={() => toggle(folder.path)} aria-expanded={isOpen(folder.path)}>
-          <span class="folder-caret">{isOpen(folder.path) ? '▾' : '▸'}</span>
-          <span class="folder-icon">{isOpen(folder.path) ? '▱' : '□'}</span>
-          <span>{folder.name}</span>
-        </button>
-        {#if isOpen(folder.path)}
-          <div class="tree-children">
-            {#each folder.children as file (file.path)}
-              <button class:active={activeFile === file.path} class="tree-file" onclick={() => onSelect?.(file.path)}>
-                <span>{file.name}</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
-      </section>
-    {/each}
+<nav class="project-tree" class:collapsed aria-label="Project files">
+  <div class="project-heading">
+    {#if !collapsed}<span>Project</span>{/if}
+    <button
+      class="project-collapse-button"
+      onclick={() => collapsed = !collapsed}
+      aria-label={collapsed ? 'Expand project files' : 'Collapse project files'}
+      aria-expanded={!collapsed}
+      title={collapsed ? 'Expand project files' : 'Collapse project files'}
+    >
+      {collapsed ? '›' : '‹'}
+    </button>
   </div>
+
+  {#if !collapsed}
+    <div class="project-scroll">
+      {#each grouped.rootFiles as file (file.path)}
+        <button class:active={activeFile === file.path} class="tree-file root-file" onclick={() => onSelect?.(file.path)}>
+          <span class="file-mark">C</span><span>{file.name}</span>
+        </button>
+      {/each}
+
+      {#each grouped.folders as folder (folder.path)}
+        <section class="tree-group">
+          <button class="tree-folder" onclick={() => toggle(folder.path)} aria-expanded={isOpen(folder.path)}>
+            <span class="folder-caret">{isOpen(folder.path) ? '▾' : '▸'}</span>
+            <span class="folder-icon">{isOpen(folder.path) ? '▱' : '□'}</span>
+            <span>{folder.name}</span>
+          </button>
+          {#if isOpen(folder.path)}
+            <div class="tree-children">
+              {#each folder.children as file (file.path)}
+                <button class:active={activeFile === file.path} class="tree-file" onclick={() => onSelect?.(file.path)}>
+                  <span>{file.name}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </section>
+      {/each}
+    </div>
+  {/if}
 </nav>
