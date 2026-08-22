@@ -7,6 +7,7 @@ MAX_DEPTH = 5
 MAX_OBJECTS = 128
 MAX_ARRAY_ELEMENTS = 64
 MAX_STRING_LENGTH = 256
+MAX_FRAMES = 12
 
 
 def _type_name(value_type):
@@ -118,7 +119,7 @@ class RuntimeState:
         if len(self.errors) < 16:
             self.errors.append(str(message))
 
-    def object_for(self, value, depth, forced_address=None):
+    def object_for(self, value, depth, forced_address=None, storage="referenced", owner_frame=None):
         if depth > MAX_DEPTH:
             self.truncated = True
             return None
@@ -126,6 +127,10 @@ class RuntimeState:
         if not object_id:
             return None
         if object_id in self.objects:
+            existing = self.objects[object_id]
+            if storage == "stack":
+                existing["storage"] = "stack"
+                existing["ownerFrame"] = owner_frame
             return object_id
         if len(self.objects) >= MAX_OBJECTS:
             self.truncated = True
@@ -138,6 +143,8 @@ class RuntimeState:
             "address": object_id,
             "type": _type_name(value_type),
             "kind": "unknown",
+            "storage": storage,
+            "ownerFrame": owner_frame,
         }
         self.objects[object_id] = node
         self.order.append(object_id)
@@ -151,16 +158,19 @@ class RuntimeState:
                         continue
                     try:
                         child = value[field.name]
-                        encoded = self.encode(child, depth + 1)
+                        encoded = self.encode(child, depth + 1, storage=storage, owner_frame=owner_frame)
+                        field_address = _address(child)
                     except Exception as error:
                         encoded = {
                             "kind": "unavailable",
                             "reason": str(error),
                             "type": _type_name(field.type),
                         }
+                        field_address = None
                     node["fields"].append({
                         "name": field.name,
                         "type": _type_name(field.type),
+                        "address": field_address,
                         "value": encoded,
                     })
                 return object_id
@@ -180,10 +190,17 @@ class RuntimeState:
                 for offset in range(visible):
                     index = low + offset
                     try:
-                        encoded = self.encode(value[index], depth + 1)
+                        child = value[index]
+                        encoded = self.encode(child, depth + 1, storage=storage, owner_frame=owner_frame)
+                        element_address = _address(child)
                     except Exception as error:
                         encoded = {"kind": "unavailable", "reason": str(error)}
-                    node["elements"].append({"index": index, "value": encoded})
+                        element_address = None
+                    node["elements"].append({
+                        "index": index,
+                        "address": element_address,
+                        "value": encoded,
+                    })
                 return object_id
 
             node["kind"] = "scalar"
@@ -195,7 +212,7 @@ class RuntimeState:
             self.add_error(error)
             return object_id
 
-    def encode(self, value, depth=0):
+    def encode(self, value, depth=0, storage="referenced", owner_frame=None):
         value_type = value.type
         stripped = _strip(value_type)
         type_name = _type_name(value_type)
@@ -244,7 +261,13 @@ class RuntimeState:
                         gdb.TYPE_CODE_ENUM,
                     ):
                         pointee = value.dereference()
-                        object_id = self.object_for(pointee, depth + 1, target)
+                        object_id = self.object_for(
+                            pointee,
+                            depth + 1,
+                            target,
+                            storage="referenced",
+                            owner_frame=None,
+                        )
                         if object_id:
                             descriptor["object"] = object_id
                 except Exception as error:
@@ -253,7 +276,12 @@ class RuntimeState:
             return descriptor
 
         if code in (gdb.TYPE_CODE_STRUCT, gdb.TYPE_CODE_UNION, gdb.TYPE_CODE_ARRAY):
-            object_id = self.object_for(value, depth)
+            object_id = self.object_for(
+                value,
+                depth,
+                storage=storage,
+                owner_frame=owner_frame,
+            )
             if object_id:
                 return {"kind": "reference", "type": type_name, "target": object_id}
 
@@ -288,17 +316,18 @@ class RuntimeState:
         except Exception:
             return {"kind": "scalar", "type": type_name, "value": str(value)}
 
-    def payload(self):
-        try:
-            frame = gdb.selected_frame()
-        except Exception as error:
-            return {"available": False, "reason": str(error)}
-
+    def frame_payload(self, frame, level):
+        frame_id = "frame:%d" % level
         roots = []
         try:
             for item in _visible_symbols(frame):
                 try:
-                    encoded = self.encode(item["value"], 0)
+                    encoded = self.encode(
+                        item["value"],
+                        0,
+                        storage="stack",
+                        owner_frame=frame_id,
+                    )
                 except Exception as error:
                     encoded = {
                         "kind": "unavailable",
@@ -310,14 +339,58 @@ class RuntimeState:
                     "name": item["name"],
                     "role": item["role"],
                     "type": _type_name(item["value"].type),
+                    "address": _address(item["value"]),
+                    "frameId": frame_id,
                     "value": encoded,
                 })
         except Exception as error:
             self.add_error(error)
 
+        try:
+            sal = frame.find_sal()
+            file_name = sal.symtab.fullname() if sal.symtab else None
+            line = sal.line or None
+        except Exception:
+            file_name = None
+            line = None
+
+        return {
+            "id": frame_id,
+            "level": level,
+            "function": frame.name() or "?",
+            "file": file_name,
+            "line": line,
+            "roots": roots,
+        }
+
+    def payload(self):
+        try:
+            selected = gdb.selected_frame()
+        except Exception as error:
+            return {"available": False, "reason": str(error)}
+
+        frames = []
+        frame = selected
+        level = 0
+        while frame is not None and level < MAX_FRAMES:
+            frames.append(self.frame_payload(frame, level))
+            try:
+                frame = frame.older()
+            except Exception:
+                frame = None
+            level += 1
+
+        if frame is not None:
+            self.truncated = True
+
+        roots = frames[0]["roots"] if frames else []
         return {
             "available": True,
-            "frame": {"function": frame.name() or "?"},
+            "frame": {
+                "function": selected.name() or "?",
+                "id": "frame:0",
+            },
+            "frames": frames,
             "roots": roots,
             "objects": [self.objects[object_id] for object_id in self.order if object_id in self.objects],
             "truncated": self.truncated,
@@ -327,6 +400,7 @@ class RuntimeState:
                 "objects": MAX_OBJECTS,
                 "arrayElements": MAX_ARRAY_ELEMENTS,
                 "stringLength": MAX_STRING_LENGTH,
+                "frames": MAX_FRAMES,
             },
         }
 
