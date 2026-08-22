@@ -15,12 +15,14 @@ def _stack(node):
             break
         seen.add(address)
         current = node.dereference()
+        next_node = current["next"]
         values.append({
             "value": _int(current["value"]),
             "index": _int(current["index"]),
             "address": hex(address),
+            "next": hex(_int(next_node)),
         })
-        node = current["next"]
+        node = next_node
     return values
 
 
