@@ -68,7 +68,7 @@ Open:
 http://localhost:4173
 ```
 
-No sibling `push_swap` directory or `TARGET_PROJECT` mount is required. Uploaded workspaces live in disposable container tmpfs.
+No sibling `push_swap` directory or `TARGET_PROJECT` mount is required. Uploaded workspaces live only inside the disposable c_vis container filesystem and disappear with the container.
 
 ## Execution protocol
 
