@@ -107,6 +107,7 @@ function buildDetails(build) {
   return {
     command: build.command ?? null,
     executable: build.executable ?? null,
+    entry: build.entry ?? null,
     stdout: tail(build.stdout),
     stderr: tail(build.stderr)
   };
@@ -131,6 +132,7 @@ async function nextMeaningfulSnapshot(client, runtimeDir, adapter, previous) {
 async function streamRun(req, res, payload, context) {
   const workspaceId = String(payload.workspaceId || '');
   const args = Array.isArray(payload.args) ? payload.args.map(String) : [];
+  const requestedEntry = payload.entry && typeof payload.entry === 'object' ? payload.entry : null;
   const paths = workspacePaths(config.workspaceRoot, workspaceId);
   const runId = createId('run');
   context.runId = runId;
@@ -158,13 +160,24 @@ async function streamRun(req, res, payload, context) {
   });
 
   increment('run.started');
-  log('info', 'run.started', { requestId: context.requestId, runId, workspaceId, argsCount: args.length });
+  log('info', 'run.started', {
+    requestId: context.requestId,
+    runId,
+    workspaceId,
+    argsCount: args.length,
+    requestedEntryKind: requestedEntry?.kind ?? 'auto',
+    requestedEntryName: requestedEntry?.name ?? null
+  });
   ndjson(res, { type: 'run.started', requestId: context.requestId, runId, workspaceId, traceLimit: config.traceLimit });
 
   try {
     ndjson(res, { type: 'build.started', runId });
     increment('build.started');
-    const build = await measure('build', { requestId: context.requestId, runId, workspaceId }, () => prepareBuild({ sourceDir: paths.sourceDir, runtimeDir }));
+    const build = await measure('build', { requestId: context.requestId, runId, workspaceId }, () => prepareBuild({
+      sourceDir: paths.sourceDir,
+      runtimeDir,
+      entry: requestedEntry
+    }));
     if (!build.ok) {
       increment('build.failed');
       throw new CVisError('BUILD_FAILED', 'The project could not be built with debug symbols', {
@@ -182,10 +195,12 @@ async function streamRun(req, res, payload, context) {
       type: 'build.completed',
       runId,
       build: buildDetails(build),
+      entry: build.entry,
       analysis: {
         profile: build.analysis.profile,
         cFiles: build.analysis.cFiles.length,
         headerFiles: build.analysis.headerFiles.length,
+        functions: build.analysis.functions.length,
         mainCandidates: build.analysis.mainCandidates,
         buildSystem: build.analysis.buildSystem?.type ?? 'cc'
       }
@@ -194,17 +209,18 @@ async function streamRun(req, res, payload, context) {
     debuggerClient = new GdbClient({
       cwd: runtimeDir,
       executable,
-      args,
+      args: build.entry?.kind === 'main' ? args : [],
       adapterScript: adapter.script ? path.join(gdbAdapterDir, adapter.script) : null,
       adapterCommand: adapter.command,
       adapterStatePrefix: adapter.statePrefix,
       tracePolicy: adapter.tracePolicy,
+      entryBreakpoint: build.entry?.breakpoint || 'main',
       stopTimeoutMs: config.gdbStopTimeoutMs
     });
     activeRuns.set(runId, { runId, workspaceId, startedAt: Date.now(), debuggerClient });
     debuggerClient.on('stderr', (chunk) => log('warn', 'gdb.stderr', { runId, text: tail(chunk, 1200) }));
 
-    ndjson(res, { type: 'debugger.started', runId, profile: adapter.id });
+    ndjson(res, { type: 'debugger.started', runId, profile: adapter.id, entry: build.entry });
     const compactState = { outputLength: 0, operationCount: 0 };
     let snapshot = normalizeSnapshot(runtimeDir, adapter, await measure('debugger.start', { runId }, () => debuggerClient.start()));
 
@@ -266,6 +282,8 @@ async function api(req, res, url, context) {
         folderUpload: true,
         browserTraceReplay: true,
         streamedTrace: true,
+        generatedFunctionHarness: true,
+        automaticEntryPoint: true,
         make: true,
         simpleCc: true
       }
@@ -307,6 +325,8 @@ async function api(req, res, url, context) {
         workspaceId,
         files: workspace.files.length,
         totalBytes: workspace.totalBytes,
+        functions: analysis.functions.length,
+        mainCandidates: analysis.mainCandidates.length,
         profile: analysis.profile,
         buildSystem: analysis.buildSystem?.type ?? 'cc'
       });
@@ -318,6 +338,7 @@ async function api(req, res, url, context) {
         analysis: {
           cFiles: analysis.cFiles,
           headerFiles: analysis.headerFiles,
+          functions: analysis.functions,
           mainCandidates: analysis.mainCandidates,
           buildSystem: analysis.buildSystem,
           profile: analysis.profile,
