@@ -135,7 +135,7 @@ export function parseMiLine(line) {
   const token = pos > 0 ? Number(trimmed.slice(0, pos)) : null;
   const type = trimmed[pos];
   const payload = trimmed.slice(pos + 1);
-  if (!['^', '*', '+', '=', '~', '@', '&'].includes(type)) return { token, type: 'raw', text: trimmed };
+  if (!['^', '*', '+', '=', '~', '@', '&'].includes(type)) return { token, type: 'raw', text: line };
   if (['~', '@', '&'].includes(type)) return { token, type, text: decodeCString(payload) };
   const comma = payload.indexOf(',');
   const klass = comma === -1 ? payload : payload.slice(0, comma);

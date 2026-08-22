@@ -1,5 +1,8 @@
 <script>
+  import { tick } from 'svelte';
+
   let { file = '', source = '', line = null, previousLine = null, functionName = '' } = $props();
+  let scroller;
   const lines = $derived(source ? source.split('\n') : []);
 
   const keywords = new Set(['if', 'else', 'for', 'while', 'return', 'sizeof', 'switch', 'case', 'break', 'continue', 'do', 'goto']);
@@ -31,6 +34,29 @@
     if (cursor < text.length) tokens.push({ text: text.slice(cursor), type: 'plain' });
     return tokens.length ? tokens : [{ text: text || ' ', type: 'plain' }];
   }
+
+  async function keepActiveLineVisible(activeLine, activeFile) {
+    if (!activeLine || !activeFile || !scroller) return;
+    await tick();
+    if (!scroller) return;
+    const target = scroller.querySelector(`[data-line="${activeLine}"]`);
+    if (!target) return;
+
+    const viewport = scroller.getBoundingClientRect();
+    const bounds = target.getBoundingClientRect();
+    const comfort = Math.min(90, viewport.height * 0.22);
+    const visible = bounds.top >= viewport.top + comfort && bounds.bottom <= viewport.bottom - comfort;
+    if (visible) return;
+
+    const top = target.offsetTop - (scroller.clientHeight / 2) + (target.clientHeight / 2);
+    scroller.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  }
+
+  $effect(() => {
+    const activeLine = line;
+    const activeFile = file;
+    void keepActiveLineVisible(activeLine, activeFile);
+  });
 </script>
 
 <section class="code-pane">
@@ -42,9 +68,9 @@
     {#if line}<code>line {line}</code>{/if}
   </header>
 
-  <div class="code-scroll">
+  <div class="code-scroll" bind:this={scroller}>
     {#if lines.length}
-      <pre>{#each lines as text, index}<div class:current={index + 1 === line} class:previous={index + 1 === previousLine} class="code-line"><span class="line-marker">{index + 1 === line ? '→' : index + 1 === previousLine ? '·' : ''}</span><span class="line-number">{index + 1}</span><code>{#each tokenize(text) as token}<span class={`tok-${token.type}`}>{token.text}</span>{/each}</code></div>{/each}</pre>
+      <pre>{#each lines as text, index}<div data-line={index + 1} class:current={index + 1 === line} class:previous={index + 1 === previousLine} class="code-line"><span class="line-marker">{index + 1 === line ? '→' : index + 1 === previousLine ? '·' : ''}</span><span class="line-number">{index + 1}</span><code>{#each tokenize(text) as token}<span class={`tok-${token.type}`}>{token.text}</span>{/each}</code></div>{/each}</pre>
     {:else}
       <div class="source-empty">Select a source file to inspect it.</div>
     {/if}

@@ -23,6 +23,12 @@ test('decodes target output', () => {
   assert.equal(parseMiLine('@"pb\\n"').text, 'pb\n');
 });
 
+test('preserves raw inferior output', () => {
+  const parsed = parseMiLine('  pb  ');
+  assert.equal(parsed.type, 'raw');
+  assert.equal(parsed.text, '  pb  ');
+});
+
 test('quotes debugger arguments', () => {
   assert.equal(miQuote('hello world'), '"hello world"');
 });

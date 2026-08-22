@@ -9,6 +9,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '..', 'dist');
 const adapterPath = path.resolve(__dirname, 'gdb', 'push_swap.py');
 
+const TRACE_HELPER_FILES = new Set([
+  'src/utils.c',
+  'src/print_numbers.c',
+  'src/benchmark.c'
+]);
+const TRACE_HELPER_FUNCTIONS = new Set([
+  'ft_strlen',
+  'ft_strcmp',
+  'ft_isspace',
+  'ft_isdigit',
+  'ft_putstr_fd',
+  'ft_putnbr_fd',
+  'ft_put_percent_fd'
+]);
+
 const config = {
   port: Number(process.env.PORT || 4173),
   sourceDir: path.resolve(process.env.CVIS_SOURCE_DIR || '/workspace/source'),
@@ -16,7 +31,8 @@ const config = {
   executable: process.env.CVIS_EXECUTABLE || './push_swap',
   buildCommand: process.env.CVIS_BUILD_COMMAND || 'make re CFLAGS="-Wall -Wextra -Werror -g -O0"',
   adapter: process.env.CVIS_ADAPTER === 'none' ? null : 'push_swap',
-  traceLimit: Number(process.env.CVIS_TRACE_LIMIT || 1500)
+  traceLimit: Number(process.env.CVIS_TRACE_LIMIT || 1500),
+  gdbStopTimeoutMs: Number(process.env.CVIS_GDB_STOP_TIMEOUT_MS || 30000)
 };
 
 let debuggerClient = null;
@@ -25,7 +41,19 @@ let lastBuild = null;
 let history = [];
 let cursor = -1;
 let traceComplete = false;
-let traceLimitReached = false;
+let traceState = makeTraceState('partial');
+let traceTask = null;
+let traceCancelRequested = false;
+
+function makeTraceState(status, fields = {}) {
+  return {
+    status,
+    message: null,
+    reason: null,
+    startedAt: null,
+    ...fields
+  };
+}
 
 function json(res, status, payload) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
@@ -35,6 +63,10 @@ function json(res, status, payload) {
 function send(res, status, payload, contentType = 'text/plain; charset=utf-8') {
   res.writeHead(status, { 'content-type': contentType });
   res.end(payload);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function body(req) {
@@ -71,11 +103,29 @@ function isOutsideProject(snapshot) {
   return !projectPath || path.isAbsolute(projectPath);
 }
 
+function isTraceHelper(snapshot) {
+  if (snapshot?.status !== 'paused') return false;
+  const file = snapshot.frame?.projectPath;
+  const fn = snapshot.frame?.func;
+  return TRACE_HELPER_FILES.has(file) || TRACE_HELPER_FUNCTIONS.has(fn);
+}
+
 function resetExecutionState() {
   history = [];
   cursor = -1;
   traceComplete = false;
-  traceLimitReached = false;
+  traceState = makeTraceState('partial');
+  traceCancelRequested = false;
+  traceTask = null;
+}
+
+function tracePayload() {
+  return {
+    ...traceState,
+    observed: history.length,
+    limit: config.traceLimit,
+    resumable: ['timed_out', 'cancelled', 'error'].includes(traceState.status)
+  };
 }
 
 function sessionPayload() {
@@ -88,15 +138,34 @@ function sessionPayload() {
     complete: traceComplete,
     latestIndex: history.length - 1,
     traceLimit: config.traceLimit,
-    traceLimitReached
+    traceLimitReached: traceState.status === 'limit',
+    trace: tracePayload()
   };
 }
 
 function appendSnapshot(snapshot) {
   history.push(snapshot);
   cursor = history.length - 1;
-  if (snapshot?.status === 'exited') traceComplete = true;
+  if (snapshot?.status === 'exited') {
+    traceComplete = true;
+    if (traceState.status !== 'running') traceState = makeTraceState('complete');
+  }
   return snapshot;
+}
+
+function markPartial() {
+  if (!traceComplete && traceState.status !== 'running') traceState = makeTraceState('partial');
+}
+
+function snapshotSignature(snapshot) {
+  if (!snapshot) return '';
+  return JSON.stringify([
+    snapshot.status,
+    snapshot.frame?.projectPath ?? null,
+    snapshot.frame?.line ?? null,
+    snapshot.operations?.length ?? 0,
+    snapshot.targetOutput?.length ?? 0
+  ]);
 }
 
 async function buildProject() {
@@ -105,8 +174,14 @@ async function buildProject() {
 }
 
 async function stopDebugger() {
+  if (traceTask) {
+    traceCancelRequested = true;
+    try { await debuggerClient?.interrupt(); } catch {}
+    await Promise.race([traceTask.catch(() => {}), sleep(1000)]);
+  }
   if (debuggerClient) await debuggerClient.stop();
   debuggerClient = null;
+  traceTask = null;
 }
 
 async function launchDebugger(args) {
@@ -115,9 +190,11 @@ async function launchDebugger(args) {
     cwd: config.runtimeDir,
     executable: config.executable,
     args,
-    adapterScript: config.adapter === 'push_swap' ? adapterPath : null
+    adapterScript: config.adapter === 'push_swap' ? adapterPath : null,
+    stopTimeoutMs: config.gdbStopTimeoutMs
   });
   appendSnapshot(normalizeSnapshot(await debuggerClient.start()));
+  markPartial();
   return sessionPayload();
 }
 
@@ -143,14 +220,18 @@ async function restartSession() {
   return { build: lastBuild, session };
 }
 
-async function captureNextSnapshot() {
+async function captureNextSnapshot({ skipHelpers = false } = {}) {
   if (!debuggerClient) throw new Error('No active debug session');
   if (traceComplete) return history.at(-1);
 
   let snapshot = normalizeSnapshot(await debuggerClient.action('step'));
   let guard = 0;
 
-  while (isOutsideProject(snapshot) && snapshot.status === 'paused' && guard < 16) {
+  while (
+    snapshot.status === 'paused'
+    && guard < 32
+    && (isOutsideProject(snapshot) || (skipHelpers && isTraceHelper(snapshot)))
+  ) {
     snapshot = normalizeSnapshot(await debuggerClient.action('finish'));
     guard += 1;
   }
@@ -158,17 +239,92 @@ async function captureNextSnapshot() {
   return appendSnapshot(snapshot);
 }
 
-async function goLast() {
-  cursor = history.length - 1;
-  while (!traceComplete && history.length < config.traceLimit) {
-    await captureNextSnapshot();
+async function recoverTraceSnapshot() {
+  if (!debuggerClient) return false;
+  try {
+    const snapshot = normalizeSnapshot(await debuggerClient.snapshot());
+    if (!snapshot) return false;
+    if (snapshotSignature(snapshot) !== snapshotSignature(history.at(-1))) appendSnapshot(snapshot);
+    else cursor = history.length - 1;
+    return true;
+  } catch {
+    return false;
   }
-  if (!traceComplete && history.length >= config.traceLimit) traceLimitReached = true;
-  cursor = history.length - 1;
+}
+
+async function runTraceToEnd() {
+  try {
+    cursor = history.length - 1;
+    while (
+      !traceComplete
+      && history.length < config.traceLimit
+      && !traceCancelRequested
+    ) {
+      await captureNextSnapshot({ skipHelpers: true });
+    }
+
+    if (traceComplete) {
+      traceState = makeTraceState('complete');
+    } else if (traceCancelRequested) {
+      traceState = makeTraceState('cancelled', {
+        reason: 'cancelled',
+        message: 'Trace cancelled. The observed states remain usable.'
+      });
+    } else if (history.length >= config.traceLimit) {
+      traceState = makeTraceState('limit', {
+        reason: 'trace-limit',
+        message: `Trace limit of ${config.traceLimit} observed states reached. Use Next to continue manually.`
+      });
+    }
+  } catch (error) {
+    await recoverTraceSnapshot();
+    if (error.code === 'EXEC_TIMEOUT') {
+      traceState = makeTraceState('timed_out', {
+        reason: 'timeout',
+        message: `${error.message}. The partial trace is still usable and can be resumed.`
+      });
+    } else {
+      traceState = makeTraceState('error', {
+        reason: 'debugger-error',
+        message: `${error.message}. The partial trace is still available.`
+      });
+    }
+  } finally {
+    cursor = history.length - 1;
+    traceCancelRequested = false;
+    traceTask = null;
+  }
+}
+
+function startTraceToEnd() {
+  if (traceTask || traceState.status === 'running') return;
+  if (traceComplete) {
+    traceState = makeTraceState('complete');
+    return;
+  }
+  if (history.length >= config.traceLimit) {
+    traceState = makeTraceState('limit', {
+      reason: 'trace-limit',
+      message: `Trace limit of ${config.traceLimit} observed states reached. Use Next to continue manually.`
+    });
+    return;
+  }
+
+  traceCancelRequested = false;
+  traceState = makeTraceState('running', { startedAt: Date.now() });
+  traceTask = runTraceToEnd();
+}
+
+async function cancelTrace() {
+  if (traceState.status !== 'running' || !traceTask) return;
+  traceCancelRequested = true;
+  traceState = { ...traceState, message: 'Cancelling trace…' };
+  try { await debuggerClient?.interrupt(); } catch {}
 }
 
 async function performAction(action) {
   if (!debuggerClient || !history.length) throw new Error('No active debug session');
+  if (traceState.status === 'running' && action !== 'last') throw new Error('Trace is currently running');
 
   if (action === 'first') {
     cursor = 0;
@@ -183,11 +339,15 @@ async function performAction(action) {
       cursor += 1;
       return;
     }
-    if (!traceComplete && !traceLimitReached) await captureNextSnapshot();
+    if (!traceComplete) {
+      await captureNextSnapshot();
+      markPartial();
+    }
     return;
   }
   if (action === 'last') {
-    await goLast();
+    cursor = history.length - 1;
+    startTraceToEnd();
     return;
   }
   throw new Error(`Unknown execution action: ${action}`);
@@ -195,12 +355,14 @@ async function performAction(action) {
 
 async function performDebugAction(action) {
   if (!debuggerClient || !history.length) throw new Error('No active debug session');
+  if (traceState.status === 'running') throw new Error('Trace is currently running');
   if (traceComplete) return;
   if (!['step', 'next', 'finish', 'continue'].includes(action)) throw new Error(`Unknown debugger action: ${action}`);
 
   cursor = history.length - 1;
   const snapshot = normalizeSnapshot(await debuggerClient.action(action));
   appendSnapshot(snapshot);
+  markPartial();
 }
 
 async function api(req, res, url) {
@@ -211,10 +373,15 @@ async function api(req, res, url) {
       executable: config.executable,
       adapter: config.adapter,
       traceLimit: config.traceLimit,
+      gdbStopTimeoutMs: config.gdbStopTimeoutMs,
       files,
       defaults: { args: ['4', '67', '3', '87', '23'] },
       lastBuild
     });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/session') {
+    return json(res, history.length ? 200 : 409, history.length ? { session: sessionPayload() } : { error: 'No active debug session' });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/source') {
@@ -244,6 +411,15 @@ async function api(req, res, url) {
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/session/trace/cancel') {
+    try {
+      await cancelTrace();
+      return json(res, 200, { session: sessionPayload() });
+    } catch (error) {
+      return json(res, 400, { error: error.message, session: sessionPayload() });
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/session/debug') {
     const payload = await body(req);
     try {
@@ -256,6 +432,7 @@ async function api(req, res, url) {
 
   if (req.method === 'POST' && url.pathname === '/api/session/navigate') {
     if (!history.length) return json(res, 409, { error: 'No active debug session' });
+    if (traceState.status === 'running') return json(res, 409, { error: 'Trace is currently running', session: sessionPayload() });
     const payload = await body(req);
     const requested = Number(payload.index);
     if (!Number.isInteger(requested)) return json(res, 400, { error: 'Invalid history index' });
