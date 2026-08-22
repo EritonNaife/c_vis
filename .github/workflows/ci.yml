@@ -24,7 +24,9 @@ jobs:
           node --check server/project.js
           node --check server/observability.js
       - name: GDB adapter syntax
-        run: python3 -m py_compile server/gdb/push_swap.py
+        run: |
+          python3 -m py_compile server/gdb/push_swap.py
+          python3 -m py_compile server/gdb/runtime.py
       - name: Svelte production build
         run: npm run build
       - name: Docker image build

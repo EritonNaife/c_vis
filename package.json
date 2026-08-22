@@ -1,6 +1,6 @@
 {
   "name": "c_vis",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Browser-first C execution visualizer powered by native GDB.",
   "type": "module",
