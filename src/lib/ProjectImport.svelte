@@ -21,6 +21,8 @@
 </script>
 
 <section
+  role="region"
+  aria-label="Import C project"
   class:dragging
   class="project-import"
   ondragover={(event) => { event.preventDefault(); dragging = true; }}
