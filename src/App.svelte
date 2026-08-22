@@ -19,6 +19,8 @@
   installGlobalObservers();
 
   const traceStore = new TraceStore();
+  const VISUAL_WIDTH_KEY = 'cvis.visualWidth';
+  const DEFAULT_VISUAL_WIDTH = 500;
   let sourceMap = new Map();
   let config = $state(null);
   let project = $state(null);
@@ -38,8 +40,80 @@
   let showDiagnostics = $state(false);
   let serverDiagnostics = $state(null);
   let clientDiagnostics = $state(null);
+  let visualWidth = $state(DEFAULT_VISUAL_WIDTH);
+  let resizingVisual = $state(false);
   let runController = null;
   let followTail = true;
+
+  function clampVisualWidth(width, workspace = null) {
+    const workspaceWidth = workspace?.getBoundingClientRect?.().width ?? (typeof window !== 'undefined' ? window.innerWidth : 1200);
+    const treeWidth = workspace?.querySelector?.('.project-tree')?.getBoundingClientRect?.().width ?? 240;
+    const max = Math.max(360, workspaceWidth - treeWidth - 360);
+    return Math.max(360, Math.min(max, Math.round(Number(width) || DEFAULT_VISUAL_WIDTH)));
+  }
+
+  function persistVisualWidth() {
+    try {
+      window.localStorage.setItem(VISUAL_WIDTH_KEY, String(visualWidth));
+    } catch {
+      // Local persistence is optional.
+    }
+  }
+
+  function adjustVisualWidth(delta) {
+    const workspace = typeof document !== 'undefined' ? document.querySelector('.workspace') : null;
+    visualWidth = clampVisualWidth(visualWidth + delta, workspace);
+    persistVisualWidth();
+  }
+
+  function startVisualResize(event) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const workspace = event.currentTarget.closest('.workspace');
+    const startX = event.clientX;
+    const startWidth = visualWidth;
+    resizingVisual = true;
+    document.body.classList.add('visual-resizing');
+
+    const move = (moveEvent) => {
+      visualWidth = clampVisualWidth(startWidth + (startX - moveEvent.clientX), workspace);
+    };
+
+    const stop = () => {
+      resizingVisual = false;
+      document.body.classList.remove('visual-resizing');
+      persistVisualWidth();
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+    };
+
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+  }
+
+  function resetVisualWidth() {
+    const workspace = typeof document !== 'undefined' ? document.querySelector('.workspace') : null;
+    visualWidth = clampVisualWidth(DEFAULT_VISUAL_WIDTH, workspace);
+    persistVisualWidth();
+  }
+
+  function handleVisualResizeKey(event) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const step = event.shiftKey ? 120 : 40;
+    adjustVisualWidth(event.key === 'ArrowLeft' ? step : -step);
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const savedWidth = Number(window.localStorage.getItem(VISUAL_WIDTH_KEY));
+      if (Number.isFinite(savedWidth) && savedWidth > 0) visualWidth = clampVisualWidth(savedWidth);
+    } catch {
+      visualWidth = DEFAULT_VISUAL_WIDTH;
+    }
+  }
 
   const total = $derived.by(() => { traceVersion; return traceStore.total; });
   const snapshot = $derived.by(() => { traceVersion; currentIndex; return traceStore.materialize(currentIndex); });
@@ -473,11 +547,26 @@
   <ErrorBanner {error} onDismiss={() => error = null} />
 
   {#if project}
-    <main class="workspace" class:static-workspace={staticMode}>
+    <main class="workspace" class:static-workspace={staticMode} style={`--visual-width: ${visualWidth}px`}>
       <ProjectTree files={projectFiles} activeFile={sourcePath} onSelect={(path) => sourcePath = path} />
       <CodePane file={sourcePath} {source} line={displayLine} {previousLine} functionName={displayFunction} />
 
       <aside class="visual-pane">
+        <div
+          class="visual-resizer"
+          class:active={resizingVisual}
+          role="separator"
+          aria-label="Resize Program and Memory pane"
+          aria-orientation="vertical"
+          aria-valuemin="360"
+          aria-valuenow={visualWidth}
+          tabindex="0"
+          title="Drag to resize · double-click to reset"
+          onpointerdown={startVisualResize}
+          ondblclick={resetVisualWidth}
+          onkeydown={handleVisualResizeKey}
+        ></div>
+
         <header class="visual-header">
           <div class="view-switcher" role="tablist" aria-label="Visualization depth">
             <button class:active={mode === 'program'} onclick={() => mode = 'program'}>{staticMode ? 'Structure' : 'Program'}</button>
