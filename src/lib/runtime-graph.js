@@ -9,6 +9,10 @@ function descriptorTarget(value) {
   return null;
 }
 
+function normalizedName(value = '') {
+  return String(value).toLowerCase().replace(/[^a-z0-9_]/g, '');
+}
+
 function pointerFields(object) {
   return (object?.fields ?? []).filter((field) => field?.value?.kind === 'pointer');
 }
@@ -30,6 +34,20 @@ function rootObject(runtime, root) {
   return mapObjects(runtime).get(target) ?? null;
 }
 
+function isScalarValue(value) {
+  return ['scalar', 'enum'].includes(value?.kind);
+}
+
+function preferredField(fields = []) {
+  const scalarFields = fields.filter((field) => isScalarValue(field?.value));
+  const preferred = ['value', 'data', 'key', 'item', 'element', 'id'];
+  for (const name of preferred) {
+    const found = scalarFields.find((field) => normalizedName(field.name) === name);
+    if (found) return found;
+  }
+  return scalarFields[0] ?? null;
+}
+
 export function valueText(value) {
   if (!value) return '—';
   if (value.kind === 'pointer') {
@@ -47,6 +65,43 @@ export function valueText(value) {
   return String(value.value ?? value.target ?? value.kind ?? '—');
 }
 
+export function primaryObjectValue(object) {
+  if (!object) return '—';
+  if (object.kind === 'scalar') return String(object.value ?? '—');
+  const field = preferredField(object.fields ?? []);
+  return field ? valueText(field.value) : object.type;
+}
+
+export function charArrayText(object) {
+  if (object?.kind !== 'array') return null;
+  const type = String(object.type ?? '').toLowerCase();
+  const looksLikeCharArray = /\bchar\b/.test(type) || (object.elements ?? []).some((element) => element?.value?.character !== undefined);
+  if (!looksLikeCharArray) return null;
+
+  let text = '';
+  for (const element of object.elements ?? []) {
+    const value = element?.value;
+    if (value?.kind !== 'scalar') return null;
+    const numeric = Number(value.value);
+    if (numeric === 0 || value.character === '\u0000') break;
+    if (value.character === undefined) return null;
+    text += value.character;
+  }
+  return text;
+}
+
+function hasQueueVocabulary(runtime) {
+  const names = new Set((runtime?.roots ?? []).map((root) => normalizedName(root.name)));
+  return (names.has('front') && names.has('rear')) || names.has('queue');
+}
+
+function linearKind(runtime, root, object) {
+  const vocabulary = `${normalizedName(root?.name)} ${normalizedName(root?.type)} ${normalizedName(object?.type)}`;
+  if (/\b(top|stack)\b/.test(vocabulary.replace(/_/g, ' ')) || normalizedName(root?.name) === 'top') return 'stack';
+  if (hasQueueVocabulary(runtime) || /queue/.test(vocabulary) || ['front', 'rear'].includes(normalizedName(root?.name))) return 'queue';
+  return 'linked-list';
+}
+
 export function classifyRoot(runtime, root) {
   const value = root?.value;
   if (!value) return { kind: 'unknown', root };
@@ -57,13 +112,21 @@ export function classifyRoot(runtime, root) {
 
   const object = rootObject(runtime, root);
   if (!object) return { kind: value.kind === 'pointer' ? 'pointer' : 'unknown', root };
-  if (object.kind === 'array') return { kind: 'array', root, object };
+  if (object.kind === 'array') {
+    const text = charArrayText(object);
+    return { kind: text === null ? 'array' : 'string-array', root, object, text };
+  }
   if (object.kind === 'scalar') return { kind: 'scalar-reference', root, object };
   if (!['struct', 'union'].includes(object.kind)) return { kind: 'object', root, object };
 
   const recursiveFields = sameTypePointerFields(runtime, object);
   if (recursiveFields.length === 1) {
-    return { kind: 'linked-list', root, object, linkField: recursiveFields[0].name };
+    return {
+      kind: linearKind(runtime, root, object),
+      root,
+      object,
+      linkField: recursiveFields[0].name
+    };
   }
   if (recursiveFields.length >= 2) {
     const names = recursiveFields.map((field) => field.name.toLowerCase());
@@ -79,6 +142,7 @@ export function classifyRoot(runtime, root) {
     }
   }
 
+  if (pointerFields(object).length >= 2) return { kind: 'graph', root, object };
   return { kind: 'struct', root, object };
 }
 
@@ -97,6 +161,7 @@ export function linkedListModel(runtime, classification, limit = 48) {
       id: current.id,
       address: current.address,
       type: current.type,
+      value: primaryObjectValue(current),
       fields: fields.filter((field) => field.name !== linkField),
       link: link?.value ?? null
     });
@@ -109,6 +174,20 @@ export function linkedListModel(runtime, classification, limit = 48) {
     cyclic: Boolean(current && seen.has(current.id)),
     truncated: Boolean(current && nodes.length >= limit),
     linkField
+  };
+}
+
+export function stackModel(runtime, classification, limit = 48) {
+  return linkedListModel(runtime, classification, limit);
+}
+
+export function queueModel(runtime, classification, limit = 48) {
+  const model = linkedListModel(runtime, classification, limit);
+  const rearRoot = (runtime?.roots ?? []).find((root) => normalizedName(root.name) === 'rear');
+  return {
+    ...model,
+    front: model.nodes[0]?.id ?? null,
+    rear: descriptorTarget(rearRoot?.value) ?? model.nodes.at(-1)?.id ?? null
   };
 }
 
@@ -127,7 +206,7 @@ export function treeModel(runtime, classification, limit = 63) {
     const current = queue.shift();
     if (!current?.object || seen.has(current.object.id)) continue;
     seen.add(current.object.id);
-    nodes.push({ ...current.object, depth: current.depth, slot: current.slot });
+    nodes.push({ ...current.object, displayValue: primaryObjectValue(current.object), depth: current.depth, slot: current.slot });
 
     childFields.forEach((fieldName, childIndex) => {
       const field = (current.object.fields ?? []).find((candidate) => candidate.name === fieldName);
@@ -157,7 +236,7 @@ export function objectGraph(runtime, root) {
     const object = objects.get(id);
     if (!object) continue;
     seen.add(id);
-    reachable.push(object);
+    reachable.push({ ...object, displayValue: primaryObjectValue(object) });
 
     for (const field of object.fields ?? []) {
       const target = descriptorTarget(field.value);
@@ -174,6 +253,75 @@ export function objectGraph(runtime, root) {
   }
 
   return { objects: reachable, edges };
+}
+
+function addLocation(locations, address, location) {
+  if (address && !locations.has(address)) locations.set(address, location);
+}
+
+export function memoryModel(runtime) {
+  const objects = runtime?.objects ?? [];
+  const objectMap = mapObjects(runtime);
+  const fallbackFrame = runtime?.frame ? [{
+    id: runtime.frame.id ?? 'frame:0',
+    level: 0,
+    function: runtime.frame.function ?? '?',
+    roots: runtime.roots ?? []
+  }] : [];
+  const frames = runtime?.frames?.length ? runtime.frames : fallbackFrame;
+  const locations = new Map();
+
+  for (const frame of frames) {
+    for (const root of frame.roots ?? []) {
+      addLocation(locations, root.address, {
+        kind: 'root',
+        frameId: frame.id,
+        label: `${frame.function}.${root.name}`,
+        root
+      });
+    }
+  }
+
+  for (const object of objects.filter((candidate) => candidate.storage === 'stack')) {
+    addLocation(locations, object.address, { kind: 'object', label: object.type, object });
+    for (const field of object.fields ?? []) {
+      addLocation(locations, field.address, { kind: 'field', label: `${object.type}.${field.name}`, object, field });
+    }
+    for (const element of object.elements ?? []) {
+      addLocation(locations, element.address, { kind: 'element', label: `${object.type}[${element.index}]`, object, element });
+    }
+  }
+
+  const referencedObjects = objects.filter((object) => object.storage !== 'stack' && !locations.has(object.address));
+  const references = [];
+
+  function addReference(source, value) {
+    if (!['pointer', 'reference'].includes(value?.kind)) return;
+    const target = descriptorTarget(value);
+    references.push({
+      source,
+      target,
+      null: target === null,
+      targetLocation: target ? locations.get(target) ?? null : null,
+      targetObject: target ? objectMap.get(target) ?? null : null
+    });
+  }
+
+  for (const frame of frames) {
+    for (const root of frame.roots ?? []) addReference(`${frame.function}.${root.name}`, root.value);
+  }
+  for (const object of objects) {
+    for (const field of object.fields ?? []) addReference(`${object.address}.${field.name}`, field.value);
+    for (const element of object.elements ?? []) addReference(`${object.address}[${element.index}]`, element.value);
+  }
+
+  return {
+    frames,
+    stackObjects: objects.filter((object) => object.storage === 'stack'),
+    referencedObjects,
+    references,
+    locations
+  };
 }
 
 function stableObjectSignature(object) {
@@ -263,7 +411,9 @@ export function diffRuntimeGraphs(previous, current) {
 }
 
 export function presentationRoots(runtime) {
-  return (runtime?.roots ?? []).map((root) => classifyRoot(runtime, root));
+  const classifications = (runtime?.roots ?? []).map((root) => classifyRoot(runtime, root));
+  const hasFront = classifications.some((item) => normalizedName(item.root?.name) === 'front');
+  return classifications.filter((item) => !(hasFront && item.kind === 'queue' && normalizedName(item.root?.name) === 'rear'));
 }
 
 export function changedPointerKeys(diff) {
