@@ -24,9 +24,11 @@ Primary navigation stays deliberately simple:
 First  ←  Previous  ←  current state  →  Next  →  Last
 ```
 
-`Next` follows the next source-level execution state. `Previous` and `First` navigate states already observed. `Last` traces forward until program exit or the configured trace limit.
+`Next` follows the next source-level execution state. `Previous` and `First` navigate states already observed. `Last` selects the final captured state; if preparation is still partial, it resumes tracing until program exit or the configured trace limit.
 
-Long traces are resumable. While `Last` is running, c_vis reports observed-state progress and exposes Cancel. A timeout, cancellation, or trace-limit stop keeps the partial history usable; use `Resume` or `Next` rather than restarting the whole session.
+`Rebuild & start` builds the target and begins materializing the whole execution history immediately. Once that preparation finishes, the timeline is a local replay: First, Previous, Next, Last, and the slider move through captured states without running the C program again. This is the same mental model as Python Tutor's Visualize flow.
+
+Long traces are resumable. While the history is being prepared, c_vis reports observed-state progress and exposes Cancel. A timeout, cancellation, or trace-limit stop keeps the partial history usable; use `Resume` or `Next` rather than restarting the whole session.
 
 ## v0.3 interface
 
@@ -124,7 +126,7 @@ The target project is mounted read-only. `c_vis` copies it into a disposable run
 - `CVIS_EXECUTABLE` — compiled target executable
 - `CVIS_BUILD_COMMAND` — target debug build command
 - `CVIS_ADAPTER` — `push_swap` or `none`
-- `CVIS_TRACE_LIMIT` — maximum captured states when tracing to Last (default `1500`)
+- `CVIS_TRACE_LIMIT` — maximum captured states in the eager execution history (default `5000`)
 - `CVIS_GDB_STOP_TIMEOUT_MS` — maximum wait for a single GDB execution command before c_vis interrupts and preserves a resumable partial trace (default `30000`)
 
 ## Current boundary

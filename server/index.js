@@ -31,7 +31,7 @@ const config = {
   executable: process.env.CVIS_EXECUTABLE || './push_swap',
   buildCommand: process.env.CVIS_BUILD_COMMAND || 'make re CFLAGS="-Wall -Wextra -Werror -g -O0"',
   adapter: process.env.CVIS_ADAPTER === 'none' ? null : 'push_swap',
-  traceLimit: Number(process.env.CVIS_TRACE_LIMIT || 1500),
+  traceLimit: Number(process.env.CVIS_TRACE_LIMIT || 5000),
   gdbStopTimeoutMs: Number(process.env.CVIS_GDB_STOP_TIMEOUT_MS || 30000)
 };
 
@@ -108,6 +108,16 @@ function isTraceHelper(snapshot) {
   const file = snapshot.frame?.projectPath;
   const fn = snapshot.frame?.func;
   return TRACE_HELPER_FILES.has(file) || TRACE_HELPER_FUNCTIONS.has(fn);
+}
+
+function isOperationOutputFrame(snapshot) {
+  if (snapshot?.status !== 'paused') return false;
+  // push_swap mutates/counts the stacks before do_op prints the operation.
+  // Once GDB is on that output line, finish the wrapper in one go so tracing
+  // never descends into ft_putstr_fd/write for every operation.
+  return snapshot.frame?.func === 'do_op'
+    && snapshot.frame?.projectPath === 'src/op_dispatch.c'
+    && Number(snapshot.frame?.line) >= 122;
 }
 
 function resetExecutionState() {
@@ -195,6 +205,11 @@ async function launchDebugger(args) {
   });
   appendSnapshot(normalizeSnapshot(await debuggerClient.start()));
   markPartial();
+  // Python Tutor-style flow: once the program has been built and launched,
+  // materialize the complete usable history in the background. The timeline
+  // remains locked while this runs and becomes a local replay surface when it
+  // is complete (or a resumable partial trace is available).
+  startTraceToEnd();
   return sessionPayload();
 }
 
@@ -224,7 +239,11 @@ async function captureNextSnapshot({ skipHelpers = false } = {}) {
   if (!debuggerClient) throw new Error('No active debug session');
   if (traceComplete) return history.at(-1);
 
-  let snapshot = normalizeSnapshot(await debuggerClient.action('step'));
+  const previous = history.at(-1);
+  const action = skipHelpers && (isTraceHelper(previous) || isOperationOutputFrame(previous))
+    ? 'finish'
+    : 'step';
+  let snapshot = normalizeSnapshot(await debuggerClient.action(action));
   let guard = 0;
 
   while (

@@ -3,6 +3,16 @@ import { EventEmitter } from 'node:events';
 import { parseMiLine, miQuote } from './mi.js';
 
 const OPERATION_RE = /^(sa|sb|ss|pa|pb|ra|rb|rr|rra|rrb|rrr)$/;
+const PUSH_SWAP_TRACE_SKIP_FILES = ['src/utils.c', 'src/print_numbers.c', 'src/benchmark.c'];
+const PUSH_SWAP_TRACE_SKIP_FUNCTIONS = [
+  'ft_strlen',
+  'ft_strcmp',
+  'ft_isspace',
+  'ft_isdigit',
+  'ft_putstr_fd',
+  'ft_putnbr_fd',
+  'ft_put_percent_fd'
+];
 
 function unwrapList(value, key) {
   if (!Array.isArray(value)) return [];
@@ -66,7 +76,19 @@ export class GdbClient extends EventEmitter {
     await this.command(`-environment-cd ${miQuote(this.cwd)}`);
     await this.command(`-file-exec-and-symbols ${miQuote(this.executable)}`);
     if (this.args.length) await this.command(`-exec-arguments ${this.args.map(miQuote).join(' ')}`);
-    if (this.adapterScript) await this.command(`-interpreter-exec console ${miQuote(`source ${this.adapterScript}`)}`);
+    if (this.adapterScript) {
+      await this.command(`-interpreter-exec console ${miQuote(`source ${this.adapterScript}`)}`);
+      // Source-level tracing should show the target's decisions, not spend a
+      // step on the output/formatting helpers called by every operation.
+      // GDB's skip list keeps `-exec-step` inside the algorithm while stepping
+      // over these helper calls reliably (including libc calls they make).
+      for (const file of PUSH_SWAP_TRACE_SKIP_FILES) {
+        await this.command(`-interpreter-exec console ${miQuote(`skip file ${file}`)}`);
+      }
+      for (const func of PUSH_SWAP_TRACE_SKIP_FUNCTIONS) {
+        await this.command(`-interpreter-exec console ${miQuote(`skip function ${func}`)}`);
+      }
+    }
     await this.command('-break-insert main');
     await this.exec('-exec-run');
     return this.snapshot();

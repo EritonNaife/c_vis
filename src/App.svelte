@@ -148,12 +148,14 @@
     await withBusy(async () => {
       await syncSession(await post('/api/session/start', { args: parseArgs(argsText) }));
     });
+    if (session?.trace?.status === 'running') void pollTrace();
   }
 
   async function restart() {
     await withBusy(async () => {
       await syncSession(await post('/api/session/restart'));
     });
+    if (session?.trace?.status === 'running') void pollTrace();
   }
 
   async function action(name) {
@@ -262,7 +264,7 @@
           <div class="visual-empty">
             <span class="eyebrow">program state</span>
             <h2>Ready to run</h2>
-            <p>Rebuild &amp; start, then move through the program one observed state at a time.</p>
+            <p>Rebuild &amp; start to capture the run, then move freely through the recorded states.</p>
           </div>
         {/if}
       </div>
