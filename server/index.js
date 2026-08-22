@@ -11,6 +11,7 @@ import { createId, diagnostics, increment, log, measure, observe } from './obser
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '..', 'dist');
 const gdbAdapterDir = path.resolve(__dirname, 'gdb');
+const runtimeInspectorPath = path.join(gdbAdapterDir, 'runtime.py');
 
 const config = {
   port: Number(process.env.PORT || 4173),
@@ -18,7 +19,7 @@ const config = {
   traceLimit: Number(process.env.CVIS_TRACE_LIMIT || 5000),
   gdbStopTimeoutMs: Number(process.env.CVIS_GDB_STOP_TIMEOUT_MS || 30000),
   maxUploadBytes: Number(process.env.CVIS_MAX_UPLOAD_BYTES || 35 * 1024 * 1024),
-  version: '0.4.0'
+  version: '0.5.0'
 };
 
 const activeRuns = new Map();
@@ -73,7 +74,9 @@ function normalizeSnapshot(runtimeDir, adapter, snapshot) {
     frame: normalizeFrame(runtimeDir, snapshot.frame),
     frames: (snapshot.frames ?? []).map((frame) => normalizeFrame(runtimeDir, frame))
   };
+  normalized.runtime = normalized.runtimeState ?? null;
   if (adapter.id === 'push_swap') normalized.pushSwap = normalized.adapterState ?? null;
+  delete normalized.runtimeState;
   delete normalized.adapterState;
   return normalized;
 }
@@ -210,6 +213,9 @@ async function streamRun(req, res, payload, context) {
       cwd: runtimeDir,
       executable,
       args: build.entry?.kind === 'main' ? args : [],
+      runtimeScript: runtimeInspectorPath,
+      runtimeCommand: 'cvis-runtime-state',
+      runtimeStatePrefix: 'CVIS_RUNTIME_STATE ',
       adapterScript: adapter.script ? path.join(gdbAdapterDir, adapter.script) : null,
       adapterCommand: adapter.command,
       adapterStatePrefix: adapter.statePrefix,
@@ -220,7 +226,7 @@ async function streamRun(req, res, payload, context) {
     activeRuns.set(runId, { runId, workspaceId, startedAt: Date.now(), debuggerClient });
     debuggerClient.on('stderr', (chunk) => log('warn', 'gdb.stderr', { runId, text: tail(chunk, 1200) }));
 
-    ndjson(res, { type: 'debugger.started', runId, profile: adapter.id, entry: build.entry });
+    ndjson(res, { type: 'debugger.started', runId, profile: adapter.id, entry: build.entry, semanticRuntime: true });
     const compactState = { outputLength: 0, operationCount: 0 };
     let snapshot = normalizeSnapshot(runtimeDir, adapter, await measure('debugger.start', { runId }, () => debuggerClient.start()));
 
@@ -282,6 +288,9 @@ async function api(req, res, url, context) {
         folderUpload: true,
         browserTraceReplay: true,
         streamedTrace: true,
+        semanticRuntimeValueGraph: true,
+        structureInference: true,
+        transitionDiffs: true,
         generatedFunctionHarness: true,
         automaticEntryPoint: true,
         make: true,
