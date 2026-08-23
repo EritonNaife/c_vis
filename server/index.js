@@ -12,14 +12,26 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '..', 'dist');
 const gdbAdapterDir = path.resolve(__dirname, 'gdb');
 
+const runtimeMode = String(process.env.CVIS_RUNTIME_MODE || 'container');
+const defaultHost = runtimeMode === 'native-linux' ? '127.0.0.1' : '0.0.0.0';
 const config = {
   port: Number(process.env.PORT || 4173),
+  host: String(process.env.CVIS_HOST || defaultHost),
+  runtimeMode,
   workspaceRoot: path.resolve(process.env.CVIS_WORKSPACE_ROOT || '/workspace/projects'),
   traceLimit: Number(process.env.CVIS_TRACE_LIMIT || 5000),
   gdbStopTimeoutMs: Number(process.env.CVIS_GDB_STOP_TIMEOUT_MS || 30000),
   maxUploadBytes: Number(process.env.CVIS_MAX_UPLOAD_BYTES || 35 * 1024 * 1024),
   version: '0.4.0'
 };
+
+function isLoopbackHost(host) {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+if (config.runtimeMode === 'native-linux' && !isLoopbackHost(config.host) && process.env.CVIS_ALLOW_REMOTE_NATIVE !== '1') {
+  throw new Error(`Refusing to bind native Linux mode to ${config.host}. Set CVIS_ALLOW_REMOTE_NATIVE=1 only for intentional remote access.`);
+}
 
 const activeRuns = new Map();
 const PUSH_SWAP_OPERATION_RE = /^(sa|sb|ss|pa|pb|ra|rb|rr|rra|rrb|rrr)$/;
@@ -274,6 +286,7 @@ async function api(req, res, url, context) {
   if (req.method === 'GET' && url.pathname === '/api/config') {
     return json(res, 200, {
       version: config.version,
+      runtimeMode: config.runtimeMode,
       traceLimit: config.traceLimit,
       maxUploadBytes: config.maxUploadBytes,
       gdbStopTimeoutMs: config.gdbStopTimeoutMs,
@@ -285,17 +298,18 @@ async function api(req, res, url, context) {
         generatedFunctionHarness: true,
         automaticEntryPoint: true,
         make: true,
-        simpleCc: true
+        simpleCc: true,
+        nativeLinux: true
       }
     });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/health') {
-    return json(res, 200, { ok: true, version: config.version, activeRuns: activeRuns.size, uptimeMs: diagnostics().uptimeMs });
+    return json(res, 200, { ok: true, version: config.version, runtimeMode: config.runtimeMode, activeRuns: activeRuns.size, uptimeMs: diagnostics().uptimeMs });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/diagnostics') {
-    return json(res, 200, { version: config.version, activeRuns: activeRuns.size, ...diagnostics() });
+    return json(res, 200, { version: config.version, runtimeMode: config.runtimeMode, activeRuns: activeRuns.size, ...diagnostics() });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/telemetry') {
@@ -422,6 +436,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(config.port, '0.0.0.0', () => {
-  log('info', 'server.started', { port: config.port, version: config.version, workspaceRoot: config.workspaceRoot, traceLimit: config.traceLimit });
+server.listen(config.port, config.host, () => {
+  log('info', 'server.started', {
+    host: config.host,
+    port: config.port,
+    version: config.version,
+    runtimeMode: config.runtimeMode,
+    workspaceRoot: config.workspaceRoot,
+    traceLimit: config.traceLimit
+  });
 });

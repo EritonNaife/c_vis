@@ -4,6 +4,8 @@ services:
     ports:
       - "4173:4173"
     environment:
+      CVIS_HOST: 0.0.0.0
+      CVIS_RUNTIME_MODE: docker
       CVIS_WORKSPACE_ROOT: /workspace/projects
       CVIS_TRACE_LIMIT: "${CVIS_TRACE_LIMIT:-5000}"
       CVIS_GDB_STOP_TIMEOUT_MS: "${CVIS_GDB_STOP_TIMEOUT_MS:-30000}"

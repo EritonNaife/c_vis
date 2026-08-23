@@ -14,6 +14,8 @@ COPY server ./server
 RUN npm run build
 
 ENV PORT=4173 \
+    CVIS_HOST=0.0.0.0 \
+    CVIS_RUNTIME_MODE=docker \
     CVIS_WORKSPACE_ROOT=/workspace/projects \
     CVIS_TRACE_LIMIT=5000 \
     CVIS_GDB_STOP_TIMEOUT_MS=30000 \
