@@ -8,6 +8,8 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "start": "node server/index.js",
+    "linux": "bash scripts/run-linux.sh",
+    "linux:check": "bash scripts/run-linux.sh --check",
     "test": "node --test"
   },
   "dependencies": {
