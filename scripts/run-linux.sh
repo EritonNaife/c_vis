@@ -66,8 +66,8 @@ fi
 if [[ "$CHECK_ONLY" -eq 1 ]]; then
   echo "c_vis native Linux prerequisites: OK"
   echo "Node: $(node --version)"
-  echo "GDB: $(gdb --version | head -n 1)"
-  echo "Compiler: $(cc --version | head -n 1)"
+  echo "GDB: $(gdb --version | sed -n '1p')"
+  echo "Compiler: $(cc --version | sed -n '1p')"
   exit 0
 fi
 
