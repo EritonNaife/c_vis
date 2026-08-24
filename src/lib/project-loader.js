@@ -1,4 +1,5 @@
 import { ClientError } from './errors.js';
+import { setProjectSessionFiles } from './project-session.js';
 
 const SKIP_SEGMENTS = new Set(['.git', '.cvis', 'node_modules', 'dist']);
 const BINARY_EXTENSIONS = new Set(['.o', '.a', '.so', '.dylib', '.dll', '.exe', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf', '.zip', '.tar', '.gz', '.7z']);
@@ -123,10 +124,12 @@ export function analyzeProject(files) {
 }
 
 export async function loadProject(entries, options = {}) {
+  setProjectSessionFiles([]);
   if (!entries?.length) throw new ClientError('Choose a C file or project folder', { code: 'EMPTY_PROJECT', stage: 'ingest' });
   const maxBytes = options.maxBytes || DEFAULT_MAX_BYTES;
   const read = await readEntries(entries, maxBytes);
   if (!read.files.length) throw new ClientError('No text project files could be imported', { code: 'EMPTY_PROJECT', stage: 'ingest' });
+  setProjectSessionFiles(read.files.map((file) => file.path));
   const analysis = await analyzeProject(read.files);
   return { ...read, analysis };
 }
