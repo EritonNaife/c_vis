@@ -4,6 +4,7 @@ set -eu
 BASE_URL="${CVIS_BASE_URL:-http://127.0.0.1:4173}"
 TRACE_FILE="${TMPDIR:-/tmp}/cvis-trace.ndjson"
 FUNCTION_TRACE_FILE="${TMPDIR:-/tmp}/cvis-function-trace.ndjson"
+GNL_TRACE_FILE="${TMPDIR:-/tmp}/cvis-gnl-trace.ndjson"
 
 ready=0
 for _ in $(seq 1 30); do
@@ -56,5 +57,41 @@ grep -q '"name":"show"' "$FUNCTION_TRACE_FILE"
 grep -q '"type":"snapshot"' "$FUNCTION_TRACE_FILE"
 grep -q '"type":"run.completed"' "$FUNCTION_TRACE_FILE"
 grep -q 'function=9' "$FUNCTION_TRACE_FILE"
+
+gnl_workspace_json=$(curl -fsS \
+  -H 'content-type: application/json' \
+  -X POST "$BASE_URL/api/workspaces" \
+  --data-binary @- <<'JSON'
+{"files":[{"path":"get_next_line.c","content":"#include <unistd.h>\n#include <stdio.h>\nchar *get_next_line(int fd) { static char line[64]; ssize_t count = read(fd, line, sizeof(line) - 1); if (count <= 0) return 0; line[count] = '\\0'; printf(\"gnl=%s\", line); return line; }\n"},{"path":"input.txt","content":"hello from fixture\\n"}]}
+JSON
+)
+
+gnl_workspace_id=$(printf '%s' "$gnl_workspace_json" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["analysis"]["mainCandidates"] == []; assert any(fn["name"] == "get_next_line" for fn in data["analysis"]["functions"]); print(data["workspaceId"])')
+
+gnl_run_json=$(python3 - "$gnl_workspace_id" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "workspaceId": sys.argv[1],
+    "entry": {
+        "kind": "function",
+        "file": "get_next_line.c",
+        "name": "get_next_line",
+        "args": ['({ extern int open(const char *, int, ...); open("input.txt", 0); })']
+    }
+}))
+PY
+)
+
+curl -fsS -N \
+  -H 'content-type: application/json' \
+  -X POST "$BASE_URL/api/runs" \
+  --data-binary "$gnl_run_json" \
+  > "$GNL_TRACE_FILE"
+
+grep -q '"name":"get_next_line"' "$GNL_TRACE_FILE"
+grep -q '"type":"snapshot"' "$GNL_TRACE_FILE"
+grep -q '"type":"run.completed"' "$GNL_TRACE_FILE"
+grep -q 'gnl=hello from fixture' "$GNL_TRACE_FILE"
 
 echo "c_vis integration smoke test passed"
