@@ -6,6 +6,8 @@ Browser-first C Visualizer.
 
 Runtime-capable C is built and executed under native GDB. Mainless functions receive a disposable generated runner. Non-executable/type-only C is visualized statically in the browser without upload, compile, GDB, or timeline.
 
+Mainless functions that accept a conventional file-descriptor parameter such as `int fd` can bind that parameter to a text file from the uploaded project. c_vis opens the selected fixture read-only in the generated runner and starts the trace inside the user's function. This makes projects such as `get_next_line(int fd)` visualizable without adding a permanent test `main()` to the source.
+
 ## Run
 
 ### Docker
