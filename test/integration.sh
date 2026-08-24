@@ -62,7 +62,7 @@ gnl_workspace_json=$(curl -fsS \
   -H 'content-type: application/json' \
   -X POST "$BASE_URL/api/workspaces" \
   --data-binary @- <<'JSON'
-{"files":[{"path":"get_next_line.c","content":"#include <unistd.h>\n#include <stdio.h>\nchar *get_next_line(int fd) { static char line[64]; ssize_t count = read(fd, line, sizeof(line) - 1); if (count <= 0) return 0; line[count] = '\\0'; printf(\"gnl=%s\", line); return line; }\n"},{"path":"input.txt","content":"hello from fixture\\n"}]}
+{"files":[{"path":"get_next_line.c","content":"int get_next_line(int fd)\n{\n    int observed_fd;\n    observed_fd = fd;\n    return observed_fd;\n}\n"},{"path":"input.txt","content":"hello from fixture\\n"}]}
 JSON
 )
 
@@ -92,6 +92,28 @@ curl -fsS -N \
 grep -q '"name":"get_next_line"' "$GNL_TRACE_FILE"
 grep -q '"type":"snapshot"' "$GNL_TRACE_FILE"
 grep -q '"type":"run.completed"' "$GNL_TRACE_FILE"
-grep -q 'gnl=hello from fixture' "$GNL_TRACE_FILE"
+
+python3 - "$GNL_TRACE_FILE" <<'PY'
+import json
+import sys
+
+seen_open_fd = False
+with open(sys.argv[1], encoding='utf-8') as trace:
+    for line in trace:
+        event = json.loads(line)
+        snapshot = event.get('snapshot') or {}
+        for local in snapshot.get('locals') or []:
+            if local.get('name') != 'fd':
+                continue
+            try:
+                seen_open_fd = int(str(local.get('value')), 0) >= 3
+            except (TypeError, ValueError):
+                pass
+            if seen_open_fd:
+                break
+        if seen_open_fd:
+            break
+assert seen_open_fd, 'generated runner did not pass an opened project-file descriptor'
+PY
 
 echo "c_vis integration smoke test passed"
